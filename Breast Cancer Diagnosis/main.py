@@ -5,6 +5,14 @@ import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import seaborn as sns
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from torchvision import transforms
+from torch.utils.data import Dataset, DataLoader
+from PIL import Image
+
 
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
@@ -222,6 +230,30 @@ calc_test['calc_distribution'] = calc_test['calc_distribution'].fillna(method='b
 #check null values
 print(calc_test.isnull().sum())
 
+mass_train['pathology'].value_counts().plot(kind='bar')
+calc_train['pathology'].value_counts().plot(kind='bar')
+
+label_mapping = {'BENIGN': 0, 'MALIGNANT': 1}
+mass_train['pathology'] = mass_train['pathology'].map(label_mapping)
+mass_test['pathology'] = mass_test['pathology'].map(label_mapping)
+calc_train['pathology'] = calc_train['pathology'].map(label_mapping)
+calc_test['pathology'] = calc_test['pathology'].map(label_mapping)
+
+print(mass_train['pathology'].value_counts())
+print(mass_test['pathology'].value_counts())
+print(calc_train['pathology'].value_counts())
+print(calc_test['pathology'].value_counts())
+
+mass_train = mass_train.dropna(subset=['pathology'])
+mass_test = mass_test.dropna(subset=['pathology'])
+calc_train = calc_train.dropna(subset=['pathology'])
+calc_test = calc_test.dropna(subset=['pathology'])
+
+mass_train['pathology'] = mass_train['pathology'].astype(int)
+mass_test['pathology'] = mass_test['pathology'].astype(int)
+calc_train['pathology'] = calc_train['pathology'].astype(int)
+calc_test['pathology'] = calc_test['pathology'].astype(int)
+
 """##### III. Data Visualization"""
 
 # quantitative summary of features
@@ -242,8 +274,6 @@ plt.figure(figsize=(8,6))
 plt.pie(value, labels=value.index, autopct='%1.1f%%')
 plt.title('Breast Cancer Mass Types', fontsize=12)
 plt.show()
-
-# Assuming mass_train and calc_train are your DataFrames
 
 # Set the color palette for mass_train
 mass_palette = sns.color_palette("viridis", n_colors=len(mass_train['assessment'].unique()))
@@ -273,7 +303,6 @@ plt.show()
 
 # view breast mass shape distribution against pathology
 plt.figure(figsize=(8,6))
-
 sns.countplot(mass_train, x='mass_shape', hue='pathology')
 plt.title('Mass Shape Distribution by Pathology', fontsize=14)
 plt.xlabel('Mass Shape')
@@ -283,30 +312,23 @@ plt.legend()
 plt.show()
 
 plt.figure(figsize=(12, 8))
-
 sns.countplot(data=calc_train, y='calc_type', hue='pathology', palette='viridis')
 plt.title('Calcification Type Distribution by Pathology', fontsize=14)
 plt.xlabel('Pathology Count')
 plt.ylabel('Calc Type')
-
 # Adjust the rotation of the y-axis labels
 plt.yticks(rotation=0, ha='right')
-
 # Move the legend outside the plot for better visibility
 plt.legend(loc='upper right', bbox_to_anchor=(1.25, 1))
-
 plt.show()
 
 # breast density against pathology
 plt.figure(figsize=(8,6))
-
 sns.countplot(mass_train, x='breast_density', hue='pathology')
-plt.title('Breast Density vs Pathology\n\n1: fatty || 2: Scattered Fibroglandular Density\n3: Heterogenously Dense || 4: Extremely Dense',
-          fontsize=14)
+plt.title('Breast Density vs Pathology\n\n1: fatty || 2: Scattered Fibroglandular Density\n3: Heterogenously Dense || 4: Extremely Dense',fontsize=14)
 plt.xlabel('Density Grades')
 plt.ylabel('Count')
 plt.legend()
-
 plt.show()
 
 # breast density against pathology
@@ -318,7 +340,6 @@ plt.title('Breast Density vs Pathology\n\n1: fatty || 2: Scattered Fibroglandula
 plt.xlabel('Density Grades')
 plt.ylabel('Count')
 plt.legend()
-
 plt.show()
 
 print(mass_train.head())
@@ -365,43 +386,70 @@ display_images('ROI_mask_file_path', 5)
 
 """##### V. Data Preprocessing"""
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-from torchvision import transforms
-from torch.utils.data import Dataset, DataLoader
-from PIL import Image
-
 # Assuming 'mass_train' and 'calc_train' are your DataFrames
 
-# Define a custom dataset class for your data
 class BreastCancerDataset(Dataset):
     def __init__(self, dataframe, transform=None):
         self.data = dataframe
         self.transform = transform
 
+        # Print unique values in the "pathology" column before mapping
+        print("Unique Labels Before Mapping:", self.data['pathology'].unique())
+
+        # Map label values to integers
+        self.labels = torch.tensor(self.data['pathology'].fillna(0).astype(int).values, dtype=torch.long)
+
+        # Print unique values in the "pathology" column after mapping
+        print("Unique Labels After Mapping:", self.data['pathology'].unique())
+
+        # Convert labels to PyTorch tensor
+        self.labels = torch.tensor(self.data['pathology'].values, dtype=torch.long)
+
+        # Calculate the number of unique classes
+        n_classes = len(self.data['pathology'].unique())
+
+        # Debugging: Ensure labels are within valid range
+        print("Number of Classes:", n_classes)
+        assert torch.all(self.labels >= 0) and torch.all(self.labels < n_classes), "Labels are out of range"
+
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        # Assuming your dataframe has a column 'image_file_path' containing the file paths to the images
         img_name = self.data.iloc[idx, 11]  # Adjust the column index as needed
-        image = Image.open(img_name)
+        image = Image.open(img_name).convert('RGB')
 
-        # Assuming your dataframe has a column 'pathology' containing the labels
-        label = self.data.iloc[idx, 10]  # Adjust the column index as needed
+        label = self.labels[idx]  # Use the converted tensor for labels
 
         if self.transform:
             image = self.transform(image)
 
         return image, label
 
-# Define transformations to be applied to the images
+"""import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"""
+
 transform = transforms.Compose([
-    transforms.Resize((224, 224)),  # Resize the image to 224x224
-    transforms.ToTensor(),           # Convert the image to a PyTorch tensor
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
+
+train_dataset = BreastCancerDataset(dataframe=mass_train, transform=transform)
+test_dataset = BreastCancerDataset(dataframe=mass_test, transform=transform)
+
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+n_classes = 2
+
+for images, labels in train_loader:
+    # Debugging: Print the labels to check their values
+    print("Labels in training batch:", labels)
+    assert torch.all(labels >= 0) and torch.all(labels < n_classes), "Labels are out of range"
+for images, labels in train_loader:
+    print(labels)
+    break  # Just to check the first batch
 
 # Define your datasets using the custom dataset class
 train_dataset = BreastCancerDataset(dataframe=mass_train, transform=transform)
@@ -468,64 +516,76 @@ print("Test Dataloader Output:")
 print(f"Images Shape: {images.shape}")
 print(f"Labels Shape: {labels.shape}")
 
-# Define your model
-class YourModel(nn.Module):
-    def __init__(self):
-        super(YourModel, self).__init__()
-        # Define your layers here
+class SimpleCNN(nn.Module):
+    def __init__(self, num_classes=2):
+        super(SimpleCNN, self).__init__()
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
+        self.fc1 = nn.Linear(128*28*28, 256)
+        self.fc2 = nn.Linear(256, num_classes)
 
     def forward(self, x):
-        # Define the forward pass of your model here
+        x = nn.ReLU()(self.conv1(x))
+        x = nn.MaxPool2d(kernel_size=2, stride=2)(x)
+        x = nn.ReLU()(self.conv2(x))
+        x = nn.MaxPool2d(kernel_size=2, stride=2)(x)
+        x = nn.ReLU()(self.conv3(x))
+        x = nn.MaxPool2d(kernel_size=2, stride=2)(x)
+        x = x.view(x.size(0), -1)
+        x = nn.ReLU()(self.fc1(x))
+        x = self.fc2(x)
         return x
 
-# Initialize your model
-model = YourModel()
-
-# Define your loss function and optimizer
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-num_epochs = 5
-# Assuming you have a CUDA-enabled device available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Move your model to the device
-model.to(device)
+model = SimpleCNN(num_classes=2).to(device)
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-# Train your model
+num_epochs = 1
+
 for epoch in range(num_epochs):
     model.train()
     running_loss = 0.0
     for images, labels in train_loader:
         images, labels = images.to(device), labels.to(device)
 
-        # Zero the parameter gradients
+        # Debugging: Print out the labels to identify problematic samples
+        print("Labels during training loop:", labels)
+
         optimizer.zero_grad()
-
-        # Forward pass
         outputs = model(images)
-
-        # Calculate the loss
         loss = criterion(outputs, labels)
-
-        # Backward pass and optimize
         loss.backward()
         optimizer.step()
 
         running_loss += loss.item()
 
-    # Print average loss for the epoch
-    print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {running_loss / len(train_loader)}")
+    # Inside the validation loop
+    model.eval()
+    with torch.no_grad():
+        correct = 0
+        total = 0
+        val_loss = 0.0
+        for images, labels in test_loader:
+            images, labels = images.to(device), labels.to(device)
 
-# Evaluate your model
-model.eval()
-correct = 0
-total = 0
-with torch.no_grad():
-    for images, labels in test_loader:
-        images, labels = images.to(device), labels.to(device)
-        outputs = model(images)
-        _, predicted = torch.max(outputs.data, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
+            # Debugging: Print out the labels to identify problematic samples
+            print("Labels during validation loop:", labels)
 
-print(f"Accuracy of the network on the test images: {(100 * correct / total):.2f}%")
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            val_loss += loss.item()
+
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+        accuracy = 100 * correct / total
+        print(f'Epoch [{epoch + 1}/{num_epochs}], '
+              f'Training Loss: {running_loss / len(train_loader):.4f}, '
+              f'Validation Loss: {val_loss / len(test_loader):.4f}, '
+              f'Accuracy: {accuracy:.2f}%')
+
+print('Finished Training')
