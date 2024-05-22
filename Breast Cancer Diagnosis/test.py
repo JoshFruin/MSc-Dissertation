@@ -4,7 +4,6 @@ import warnings
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import seaborn as sns
-import numpy as np
 
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
@@ -355,6 +354,31 @@ display_images('cropped_image_file_path', 5)
 print('ROI Images:\n')
 display_images('ROI_mask_file_path', 5)
 
+def display_images(column, number):
+    """displays images in the dataset"""
+    # create figure and axes
+    number_to_visualize = number
+    rows = 1
+    cols = number_to_visualize
+    fig, axes = plt.subplots(rows, cols, figsize=(15, 5))
+
+    # Loop through rows and display images
+    for index, row in calc_train.head(number_to_visualize).iterrows():
+        image_path = row[column]
+        print(image_path)
+        # Check if the file exists
+        if os.path.exists(image_path):
+            image = mpimg.imread(image_path)
+            # Plot the image
+            axes[index].imshow(image, cmap='gray')
+            axes[index].set_title(f"{row['pathology']}")
+            axes[index].axis('off')
+        else:
+            print(f"File not found: {image_path}")
+
+    plt.tight_layout()
+    plt.show()
+
 print('Calc Training Dataset\n\n')
 print('Full Mammograms:\n')
 display_images('image_file_path', 5)
@@ -411,62 +435,7 @@ test_dataset = BreastCancerDataset(dataframe=mass_test, transform=transform)
 train_loader = DataLoader(dataset=train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(dataset=test_dataset, batch_size=32, shuffle=False)
 
-# Step 1: Iterate through the Datasets
-# Define a function to display images from the dataset
-def show_images(dataset, num_images=5):
-    fig, axes = plt.subplots(1, num_images, figsize=(15, 3))
-    for i in range(num_images):
-        image, label = dataset[i]
-        axes[i].imshow(image.permute(1, 2, 0))  # Convert from tensor format to numpy array
-        axes[i].set_title(f"Label: {label}")
-        axes[i].axis('off')
-    plt.show()
-
-# Display images from the training dataset
-print("Training Dataset:")
-show_images(train_dataset)
-
-# Display images from the test dataset
-print("Test Dataset:")
-show_images(test_dataset)
-
-# Step 2: Visualize the Images
-# Define a function to visualize a batch of data from the dataloader
-def visualize_batch(dataloader):
-    # Get a batch of data
-    images, labels = next(iter(dataloader))
-    # Convert images to numpy arrays
-    images = images.numpy()
-    # Plot the images
-    fig, axes = plt.subplots(1, len(images), figsize=(15, 3))
-    for i in range(len(images)):
-        axes[i].imshow(np.transpose(images[i], (1, 2, 0)))  # Convert from tensor format to numpy array
-        axes[i].set_title(f"Label: {labels[i].item()}")
-        axes[i].axis('off')
-    plt.show()
-
-# Visualize a batch of data from the training dataloader
-print("Training Dataloader:")
-visualize_batch(train_loader)
-
-# Visualize a batch of data from the test dataloader
-print("Test Dataloader:")
-visualize_batch(test_loader)
-
-# Step 3: Check Dataloader Output
-# Get a batch of data from the training dataloader
-images, labels = next(iter(train_loader))
-# Print the shapes of images and labels
-print("Training Dataloader Output:")
-print(f"Images Shape: {images.shape}")
-print(f"Labels Shape: {labels.shape}")
-
-# Get a batch of data from the test dataloader
-images, labels = next(iter(test_loader))
-# Print the shapes of images and labels
-print("Test Dataloader Output:")
-print(f"Images Shape: {images.shape}")
-print(f"Labels Shape: {labels.shape}")
+# Assuming you have a CNN model defined
 
 # Define your model
 class YourModel(nn.Module):
