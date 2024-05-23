@@ -402,9 +402,6 @@ class BreastCancerDataset(Dataset):
         # Print unique values in the "pathology" column after mapping
         print("Unique Labels After Mapping:", self.data['pathology'].unique())
 
-        # Convert labels to PyTorch tensor
-        self.labels = torch.tensor(self.data['pathology'].values, dtype=torch.long)
-
         # Calculate the number of unique classes
         n_classes = len(self.data['pathology'].unique())
 
@@ -421,16 +418,11 @@ class BreastCancerDataset(Dataset):
 
         # Handle missing mask values
         if pd.isnull(mask_name):
-            # Option 1: Skip samples with missing masks
-            # return None  # or raise an exception
-
-            # Option 2: Use a black mask (all zeros) as a placeholder
-            mask = Image.new("L", (224, 224))  # Create a black image
-
+            mask = Image.new("L", (224, 224))  # Create a black image (grayscale)
         else:
-            mask = Image.open(mask_name)
+            mask = Image.open(mask_name).convert("L")  # Ensure mask is grayscale
 
-        image = Image.open(img_name).convert('RGB')
+        image = Image.open(img_name).convert("L")  # Ensure image is grayscale
 
         # Apply transforms separately for image and mask
         if self.transform is not None:
@@ -445,56 +437,49 @@ class BreastCancerDataset(Dataset):
 
         return image, mask, self.labels[idx]
 
-
+# Define transforms
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    transforms.Normalize(mean=[0.5], std=[0.5]),  # Normalization for grayscale images
 ])
 
+# Initialize datasets and dataloaders
 train_dataset = BreastCancerDataset(dataframe=mass_train, transform=transform)
 test_dataset = BreastCancerDataset(dataframe=mass_test, transform=transform)
 
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-n_classes = 2
-
-for images, masks, labels in train_loader:  # Unpack 3 values
-    # Debugging: Print the labels to check their values
-    print("Labels in training batch:", labels)
-    assert torch.all(labels >= 0) and torch.all(labels < n_classes), "Labels are out of range"
-
-    # You can also print/check masks here if needed:
-    print("Masks in training batch (shape):", masks.shape)
-
-for images, masks, labels in train_loader:
-    print(labels)
-    break  # Just to check the first batch
-
-# Define your datasets using the custom dataset class
-train_dataset = BreastCancerDataset(dataframe=mass_train, transform=transform)
-test_dataset = BreastCancerDataset(dataframe=mass_test, transform=transform)
-
-# Define your dataloaders
-train_loader = DataLoader(dataset=train_dataset, batch_size=32, shuffle=True)
-test_loader = DataLoader(dataset=test_dataset, batch_size=32, shuffle=False)
-
-# Step 1: Iterate through the Datasets
-# Define a function to display images from the dataset
+# Visualization functions
 def show_images(dataset, num_images=5):
     fig, axes = plt.subplots(2, num_images, figsize=(15, 6))
     for i in range(num_images):
         image, mask, label = dataset[i]
-        axes[0, i].imshow(image.permute(1, 2, 0))
+        axes[0, i].imshow(image.squeeze(), cmap='gray')
         axes[0, i].set_title(f"Label: {label}")
         axes[0, i].axis('off')
 
-        axes[1, i].imshow(mask.squeeze(), cmap='gray')  # Squeeze to remove channel dimension
+        axes[1, i].imshow(mask.squeeze(), cmap='gray')
         axes[1, i].set_title("Mask")
         axes[1, i].axis('off')
     plt.show()
 
+def visualize_batch(dataloader, num_images_to_display=4):
+    images, masks, labels = next(iter(dataloader))
+    num_images = min(num_images_to_display, len(images))
+    fig, axes = plt.subplots(2, num_images, figsize=(15, 6))
+    for i in range(num_images):
+        axes[0, i].imshow(images[i].squeeze().cpu().numpy(), cmap='gray')
+        axes[0, i].set_title(f"Label: {labels[i].item()}")
+        axes[0, i].axis('off')
+
+        axes[1, i].imshow(masks[i].squeeze().cpu().numpy(), cmap='gray')
+        axes[1, i].set_title(f"Mask {i+1}")
+        axes[1, i].axis('off')
+
+    plt.tight_layout()
+    plt.show()
 
 # Display images from the training dataset
 print("Training Dataset:")
@@ -503,30 +488,6 @@ show_images(train_dataset)
 # Display images from the test dataset
 print("Test Dataset:")
 show_images(test_dataset)
-
-# Step 2: Visualize the Images
-# Define a function to visualize a batch of data from the dataloader
-def visualize_batch(dataloader, num_images_to_display=4):  # Added a parameter for flexibility
-    # Get a batch of data
-    images, masks, labels = next(iter(dataloader))
-
-    num_images = min(num_images_to_display, len(images))  # Display up to num_images_to_display
-
-    # Plot the images and masks
-    fig, axes = plt.subplots(2, num_images, figsize=(15, 6))  # 2 rows for images and masks
-    for i in range(num_images):
-        # Image
-        axes[0, i].imshow(np.transpose(images[i], (1, 2, 0)))
-        axes[0, i].set_title(f"Label: {labels[i].item()}")
-        axes[0, i].axis('off')
-
-        # Mask
-        axes[1, i].imshow(masks[i].squeeze(), cmap='gray')  # Squeeze to remove channel dimension
-        axes[1, i].set_title(f"Mask {i+1}")
-        axes[1, i].axis('off')
-
-    plt.tight_layout()
-    plt.show()
 
 # Visualize a batch of data from the training dataloader
 print("Training Dataloader:")
@@ -537,36 +498,30 @@ print("Test Dataloader:")
 visualize_batch(test_loader)
 
 # Step 3: Check Dataloader Output
-# Get a batch of data from the training dataloader
-images, masks, labels = next(iter(train_loader))  # Unpack 3 values
-# Print the shapes of images, masks, and labels
+images, masks, labels = next(iter(train_loader))
 print("Training Dataloader Output:")
 print(f"Images Shape: {images.shape}")
 print(f"Masks Shape: {masks.shape}")
 print(f"Labels Shape: {labels.shape}")
 
-# Get a batch of data from the test dataloader
-images, masks, labels = next(iter(test_loader))  # Unpack 3 values
-# Print the shapes of images, masks, and labels
+images, masks, labels = next(iter(test_loader))
 print("Test Dataloader Output:")
 print(f"Images Shape: {images.shape}")
 print(f"Masks Shape: {masks.shape}")
 print(f"Labels Shape: {labels.shape}")
 
-
+# Define SimpleCNN with grayscale support
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes=2):
         super(SimpleCNN, self).__init__()
-        # Modified first conv layer to expect 4 channels
-        self.conv1 = nn.Conv2d(4, 32, kernel_size=3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(2, 32, kernel_size=3, stride=1, padding=1)  # Adjusted for 2 channels (image + mask)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
         self.fc1 = nn.Linear(128*28*28, 256)
         self.fc2 = nn.Linear(256, num_classes)
 
     def forward(self, x, mask):
-        # Concatenate the image and mask along the channel dimension
-        x = torch.cat((x, mask), dim=1)
+        x = torch.cat((x, mask), dim=1)  # Concatenate along the channel dimension
         x = nn.ReLU()(self.conv1(x))
         x = nn.MaxPool2d(kernel_size=2, stride=2)(x)
         x = nn.ReLU()(self.conv2(x))
@@ -579,11 +534,9 @@ class SimpleCNN(nn.Module):
         return x
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 model = SimpleCNN(num_classes=2).to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-
 num_epochs = 1
 
 for epoch in range(num_epochs):
@@ -591,39 +544,23 @@ for epoch in range(num_epochs):
     running_loss = 0.0
     for i, (images, masks, labels) in enumerate(train_loader):
         images, masks, labels = images.to(device), masks.to(device), labels.to(device)
-        print(images.shape)
-        print(masks.shape)
-
-        # Debugging: Print out the labels to identify problematic samples
-        print("Labels during training loop:", labels)
-
         optimizer.zero_grad()
-        # Assuming you modified your model to take two inputs
         outputs = model(images, masks)
-        loss = criterion(outputs, labels)  # Choose an appropriate loss function
+        loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
-
         running_loss += loss.item()
 
-    # Inside the validation loop
     model.eval()
     with torch.no_grad():
         correct = 0
         total = 0
         val_loss = 0.0
-        for images, masks, labels in test_loader:  # Unpack 3 values
+        for images, masks, labels in test_loader:
             images, masks, labels = images.to(device), masks.to(device), labels.to(device)
-
-            # Debugging: Print out the labels to identify problematic samples
-            print("Labels during validation loop:", labels)
-
-            # Modify this based on your model's input
-            outputs = model(images, masks)  # Assuming your model takes both inputs
-
+            outputs = model(images, masks)
             loss = criterion(outputs, labels)
             val_loss += loss.item()
-
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
