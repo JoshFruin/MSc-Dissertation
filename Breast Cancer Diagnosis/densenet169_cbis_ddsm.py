@@ -576,55 +576,7 @@ target_size = (224, 224, 3)
 
 mass_calc
 
-"""##### IV. Image Preprocessing
-
-def apply_gaussian_filter(image, sigma=1.0):
-    Apply Gaussian filter to the image
-    return cv2.GaussianBlur(image, (0, 0), sigma)
-
-def apply_clahe(image, clip_limit=2.0, tile_grid_size=(8, 8)):
-    Apply CLAHE to enhance image contrast.
-    lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-    lab_planes = list(cv2.split(lab))  # Convert to list
-
-    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
-    lab_planes[0] = clahe.apply(lab_planes[0])
-
-    lab = cv2.merge(lab_planes)
-    return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
-"""
-
-# def image_processor(image_path, target_size, base_directory="/kaggle/input/cbis-ddsm-breast-cancer-image-dataset/jpeg"):
-#    """Preprocess images for Inception V3 model with Gaussian filter and CLAHE"""
-#    absolute_image_path = os.path.abspath(image_path)
-
-    # Counter for skipped and processed images
-#    skipped_count = 0
-#    processed_count = 0
-
-    # Check if the image path starts with the specified directory
-#    if not absolute_image_path.startswith(base_directory):
-#        skipped_count += 1
-#        return None, skipped_count, processed_count
-
-#    image = cv2.imread(absolute_image_path)
-#    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    # Apply Gaussian filter
-    # image = apply_gaussian_filter(image, sigma=1.0)
-
-    # Resize the image
-#    image = cv2.resize(image, (target_size[1], target_size[0]))
-
-    # Apply CLAHE
-    # image = apply_clahe(image, clip_limit=2.0, tile_grid_size=(8, 8))
-
-    # Normalize pixel values to be in the range [0, 1]
-#    image_array = image / 255.0
-
-#    processed_count += 1
-
-#    return image_array, skipped_count, processed_count
+"""##### IV. Image Preprocessing"""
 
 def image_processor(image_path, target_size, base_directory="/kaggle/input/cbis-ddsm-breast-cancer-image-dataset/jpeg"):
     """Preprocess images for Inception V3 model with Gaussian filter and CLAHE"""
@@ -689,30 +641,6 @@ num_classes = len(mass_calc['labels'].unique())
 
 num_classes
 
-# Apply preprocessor to cropped data
-# result_cropped = mass_calc['cropped_image_file_path'].apply(lambda x: pd.Series(image_processor(x, target_size), index=['cropped_image_array', 'cropped_skipped_count', 'cropped_processed_count']))
-
-# Extract processed cropped images, skipped count, and processed count from the result
-# mass_calc[['processed_cropped_images', 'cropped_skipped_count', 'cropped_processed_count']] = result_cropped
-
-# Filter out rows where processed_cropped_images is None
-# mass_calc = mass_calc.dropna(subset=['processed_cropped_images'])
-
-# Convert the processed_cropped_images column to an array
-# X_resized_cropped = np.array(mass_calc['processed_cropped_images'].tolist())
-
-# Combine the processed images from both columns if needed
-# X_combined = np.concatenate([X_resized, X_resized_cropped], axis=???)
-
-# Create a binary mapper for the labels if not already created
-# class_mapper = {'MALIGNANT': 1, 'BENIGN': 0, 'BENIGN_WITHOUT_CALLBACK': 0}
-
-# Apply class mapper to pathology column if not already applied
-# mass_calc['labels'] = mass_calc['pathology'].replace(class_mapper)
-
-# Check the number of classes
-# num_classes = len(mass_calc['labels'].unique())
-
 skipped_sum = mass_calc['skipped_count'].sum()
 #+ mass_calc['cropped_skipped_count'].sum()
 print(f"Total skipped count: {skipped_sum}")
@@ -723,39 +651,7 @@ print(f"Total processed count: {processed_count}")
 
 mass_calc['processed_count'].sum()
 
-# mass_calc['cropped_processed_count'].sum()
-
-# Apply preprocessor to train data
-# mass_calc[['processed_images', 'skipped_count', 'processed_count']] = mass_calc['image_file_path'].apply(
-    # lambda x: pd.Series(image_processor(x, target_size), index=['image_array', 'skipped_count', 'processed_count']))
-
-# Create a binary mapper
-# class_mapper = {'MALIGNANT': 1, 'BENIGN': 0, 'BENIGN_WITHOUT_CALLBACK': 0}
-
-# Apply preprocessor to train data
-# mass_calc['processed_images'] = mass_calc['image_file_path'].apply(lambda x: image_processor(x, target_size))
-
-# Create a binary mapper
-# class_mapper = {'MALIGNANT': 1, 'BENIGN': 0, 'BENIGN_WITHOUT_CALLBACK': 0}
-
 mass_calc
-
-# Assuming your DataFrame is named 'your_dataframe'
-# Replace 'your_generated_data.csv' with the desired file name
-# mass_calc.to_csv('mass_calc.csv', index=False)
-
-# from IPython.display import FileLink
-# Generate a download link
-# FileLink('mass_calc.csv')
-
-# Convert the processed_images column to an array
-# X_resized = np.array(mass_calc['processed_images'].tolist())
-
-# Apply class mapper to pathology column
-# mass_calc['labels'] = mass_calc['pathology'].replace(class_mapper)
-
-# Check the number of classes
-# num_classes = len(mass_calc['labels'].unique())
 
 print('Number of Classes:', num_classes)
 
@@ -843,17 +739,6 @@ train_datagen = ImageDataGenerator(rotation_range=30,
 # Apply augmentation to training data
 train_data_augmented = train_datagen.flow(X_train, y_train, batch_size=32)
 
-# batch_size = 32
-# total_images_before_augmentation = 2628
-
-# Calculate the total number of batches generated
-# total_batches = total_images_before_augmentation / batch_size
-
-# Calculate the total number of images after augmentation
-# total_images_after_augmentation = total_batches * batch_size
-
-# print("Total images after augmentation:", total_images_after_augmentation)
-
 """##### VII. DenseNet 169"""
 
 # Create the DenseNet 169 base model
@@ -934,20 +819,6 @@ for epoch in range(epochs):
 # Calculate the total number of iterations
 iterations = 4*5*len(X_train)//12 # Assuming 200 epochs and batch size of 32
 print(f'Total number of iterations: {iterations}')
-
-# Assuming train_data_augmented is a data generator
-# history = model.fit(
-#    train_data_augmented,
-#    epochs=200,
-#    validation_data=(X_val, y_val),
-#    steps_per_epoch=len(train_data_augmented),
-#    validation_steps=len(X_val),
-#    callbacks=[early_stopping]  # Add the EarlyStopping callback
-#)
-
-# Calculate the total number of iterations
-# iterations = 60 * len(train_data_augmented)
-# print(f'Total number of iterations: {iterations}')
 
 """##### IV. Results"""
 

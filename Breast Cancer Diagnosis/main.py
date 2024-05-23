@@ -416,18 +416,35 @@ class BreastCancerDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        img_name = self.data.iloc[idx, 11]  # Adjust the column index as needed
+        img_name = self.data.iloc[idx, 11]  # Full mammogram image
+        mask_name = self.data.iloc[idx, 13]  # ROI mask
+
+        # Handle missing mask values
+        if pd.isnull(mask_name):
+            # Option 1: Skip samples with missing masks
+            # return None  # or raise an exception
+
+            # Option 2: Use a black mask (all zeros) as a placeholder
+            mask = Image.new("L", (224, 224))  # Create a black image
+
+        else:
+            mask = Image.open(mask_name)
+
         image = Image.open(img_name).convert('RGB')
 
-        label = self.labels[idx]  # Use the converted tensor for labels
-
-        if self.transform:
+        # Apply transforms separately for image and mask
+        if self.transform is not None:
             image = self.transform(image)
 
-        return image, label
+        # Transform for the mask (no normalization)
+        mask_transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor()
+        ])
+        mask = mask_transform(mask)
 
-"""import os
-os.environ['CUDA_LAUNCH_BLOCKING'] = "1"""
+        return image, mask, self.labels[idx]
+
 
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
@@ -443,11 +460,15 @@ test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
 n_classes = 2
 
-for images, labels in train_loader:
+for images, masks, labels in train_loader:  # Unpack 3 values
     # Debugging: Print the labels to check their values
     print("Labels in training batch:", labels)
     assert torch.all(labels >= 0) and torch.all(labels < n_classes), "Labels are out of range"
-for images, labels in train_loader:
+
+    # You can also print/check masks here if needed:
+    print("Masks in training batch (shape):", masks.shape)
+
+for images, masks, labels in train_loader:
     print(labels)
     break  # Just to check the first batch
 
@@ -462,13 +483,18 @@ test_loader = DataLoader(dataset=test_dataset, batch_size=32, shuffle=False)
 # Step 1: Iterate through the Datasets
 # Define a function to display images from the dataset
 def show_images(dataset, num_images=5):
-    fig, axes = plt.subplots(1, num_images, figsize=(15, 3))
+    fig, axes = plt.subplots(2, num_images, figsize=(15, 6))
     for i in range(num_images):
-        image, label = dataset[i]
-        axes[i].imshow(image.permute(1, 2, 0))  # Convert from tensor format to numpy array
-        axes[i].set_title(f"Label: {label}")
-        axes[i].axis('off')
+        image, mask, label = dataset[i]
+        axes[0, i].imshow(image.permute(1, 2, 0))
+        axes[0, i].set_title(f"Label: {label}")
+        axes[0, i].axis('off')
+
+        axes[1, i].imshow(mask.squeeze(), cmap='gray')  # Squeeze to remove channel dimension
+        axes[1, i].set_title("Mask")
+        axes[1, i].axis('off')
     plt.show()
+
 
 # Display images from the training dataset
 print("Training Dataset:")
@@ -480,17 +506,26 @@ show_images(test_dataset)
 
 # Step 2: Visualize the Images
 # Define a function to visualize a batch of data from the dataloader
-def visualize_batch(dataloader):
+def visualize_batch(dataloader, num_images_to_display=4):  # Added a parameter for flexibility
     # Get a batch of data
-    images, labels = next(iter(dataloader))
-    # Convert images to numpy arrays
-    images = images.numpy()
-    # Plot the images
-    fig, axes = plt.subplots(1, len(images), figsize=(15, 3))
-    for i in range(len(images)):
-        axes[i].imshow(np.transpose(images[i], (1, 2, 0)))  # Convert from tensor format to numpy array
-        axes[i].set_title(f"Label: {labels[i].item()}")
-        axes[i].axis('off')
+    images, masks, labels = next(iter(dataloader))
+
+    num_images = min(num_images_to_display, len(images))  # Display up to num_images_to_display
+
+    # Plot the images and masks
+    fig, axes = plt.subplots(2, num_images, figsize=(15, 6))  # 2 rows for images and masks
+    for i in range(num_images):
+        # Image
+        axes[0, i].imshow(np.transpose(images[i], (1, 2, 0)))
+        axes[0, i].set_title(f"Label: {labels[i].item()}")
+        axes[0, i].axis('off')
+
+        # Mask
+        axes[1, i].imshow(masks[i].squeeze(), cmap='gray')  # Squeeze to remove channel dimension
+        axes[1, i].set_title(f"Mask {i+1}")
+        axes[1, i].axis('off')
+
+    plt.tight_layout()
     plt.show()
 
 # Visualize a batch of data from the training dataloader
@@ -503,29 +538,35 @@ visualize_batch(test_loader)
 
 # Step 3: Check Dataloader Output
 # Get a batch of data from the training dataloader
-images, labels = next(iter(train_loader))
-# Print the shapes of images and labels
+images, masks, labels = next(iter(train_loader))  # Unpack 3 values
+# Print the shapes of images, masks, and labels
 print("Training Dataloader Output:")
 print(f"Images Shape: {images.shape}")
+print(f"Masks Shape: {masks.shape}")
 print(f"Labels Shape: {labels.shape}")
 
 # Get a batch of data from the test dataloader
-images, labels = next(iter(test_loader))
-# Print the shapes of images and labels
+images, masks, labels = next(iter(test_loader))  # Unpack 3 values
+# Print the shapes of images, masks, and labels
 print("Test Dataloader Output:")
 print(f"Images Shape: {images.shape}")
+print(f"Masks Shape: {masks.shape}")
 print(f"Labels Shape: {labels.shape}")
+
 
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes=2):
         super(SimpleCNN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
+        # Modified first conv layer to expect 4 channels
+        self.conv1 = nn.Conv2d(4, 32, kernel_size=3, stride=1, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
         self.fc1 = nn.Linear(128*28*28, 256)
         self.fc2 = nn.Linear(256, num_classes)
 
-    def forward(self, x):
+    def forward(self, x, mask):
+        # Concatenate the image and mask along the channel dimension
+        x = torch.cat((x, mask), dim=1)
         x = nn.ReLU()(self.conv1(x))
         x = nn.MaxPool2d(kernel_size=2, stride=2)(x)
         x = nn.ReLU()(self.conv2(x))
@@ -548,15 +589,18 @@ num_epochs = 1
 for epoch in range(num_epochs):
     model.train()
     running_loss = 0.0
-    for images, labels in train_loader:
-        images, labels = images.to(device), labels.to(device)
+    for i, (images, masks, labels) in enumerate(train_loader):
+        images, masks, labels = images.to(device), masks.to(device), labels.to(device)
+        print(images.shape)
+        print(masks.shape)
 
         # Debugging: Print out the labels to identify problematic samples
         print("Labels during training loop:", labels)
 
         optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
+        # Assuming you modified your model to take two inputs
+        outputs = model(images, masks)
+        loss = criterion(outputs, labels)  # Choose an appropriate loss function
         loss.backward()
         optimizer.step()
 
@@ -568,13 +612,15 @@ for epoch in range(num_epochs):
         correct = 0
         total = 0
         val_loss = 0.0
-        for images, labels in test_loader:
-            images, labels = images.to(device), labels.to(device)
+        for images, masks, labels in test_loader:  # Unpack 3 values
+            images, masks, labels = images.to(device), masks.to(device), labels.to(device)
 
             # Debugging: Print out the labels to identify problematic samples
             print("Labels during validation loop:", labels)
 
-            outputs = model(images)
+            # Modify this based on your model's input
+            outputs = model(images, masks)  # Assuming your model takes both inputs
+
             loss = criterion(outputs, labels)
             val_loss += loss.item()
 
