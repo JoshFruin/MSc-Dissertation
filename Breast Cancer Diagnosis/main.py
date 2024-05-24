@@ -82,6 +82,7 @@ print(calc_test_data.head())
 
 # Define the path fixing function for the metadata DataFrames
 def fix_image_path_mass(dataset, full_mammogram_dict, cropped_dict, roi_mask_dict):
+    valid_entries = []
     for i, img in enumerate(dataset.values):
         if len(img) > 11 and isinstance(img[11], str) and '/' in img[11]:
             img_name = img[11].split("/")[-2]
@@ -98,15 +99,22 @@ def fix_image_path_mass(dataset, full_mammogram_dict, cropped_dict, roi_mask_dic
             if img_name in roi_mask_dict:
                 dataset.iloc[i, 13] = roi_mask_dict[img_name]
 
+        # Add to valid entries if full mammogram and mask are present
+        if dataset.iloc[i, 11] in full_mammogram_dict.values() and dataset.iloc[i, 13] in roi_mask_dict.values():
+            valid_entries.append(i)
+
+    return dataset.iloc[valid_entries]
+
 # Apply the function to the mass and calc datasets
-fix_image_path_mass(mass_train_data, full_mammogram_dict, cropped_dict, roi_mask_dict)
-fix_image_path_mass(mass_test_data, full_mammogram_dict, cropped_dict, roi_mask_dict)
+mass_train_data = fix_image_path_mass(mass_train_data, full_mammogram_dict, cropped_dict, roi_mask_dict)
+mass_test_data = fix_image_path_mass(mass_test_data, full_mammogram_dict, cropped_dict, roi_mask_dict)
 
 # Check the updated DataFrames (optional, for checking)
 print(mass_train_data.head())
 print(mass_test_data.head())
 
 def fix_image_path_calc(dataset, full_mammogram_dict, cropped_dict, roi_mask_dict):
+    valid_entries = []
     for i, img in enumerate(dataset.values):
         if len(img) > 11 and isinstance(img[11], str) and '/' in img[11]:
             img_name = img[11].split("/")[-2]
@@ -123,9 +131,15 @@ def fix_image_path_calc(dataset, full_mammogram_dict, cropped_dict, roi_mask_dic
             if img_name in roi_mask_dict:
                 dataset.iloc[i, 13] = roi_mask_dict[img_name]
 
+        # Add to valid entries if full mammogram and mask are present
+        if dataset.iloc[i, 11] in full_mammogram_dict.values() and dataset.iloc[i, 13] in roi_mask_dict.values():
+            valid_entries.append(i)
+
+    return dataset.iloc[valid_entries]
+
 # Apply the function to the calc datasets
-fix_image_path_calc(calc_train_data, full_mammogram_dict, cropped_dict, roi_mask_dict)
-fix_image_path_calc(calc_test_data, full_mammogram_dict, cropped_dict, roi_mask_dict)
+calc_train_data = fix_image_path_calc(calc_train_data, full_mammogram_dict, cropped_dict, roi_mask_dict)
+calc_test_data = fix_image_path_calc(calc_test_data, full_mammogram_dict, cropped_dict, roi_mask_dict)
 
 # Check the updated DataFrames (optional, for checking)
 print(calc_train_data.head())
@@ -233,7 +247,7 @@ print(calc_test.isnull().sum())
 mass_train['pathology'].value_counts().plot(kind='bar')
 calc_train['pathology'].value_counts().plot(kind='bar')
 
-label_mapping = {'BENIGN': 0, 'MALIGNANT': 1}
+label_mapping = {'BENIGN': 0,'BENIGN_WITHOUT_CALLBACK': 0, 'MALIGNANT': 1}
 mass_train['pathology'] = mass_train['pathology'].map(label_mapping)
 mass_test['pathology'] = mass_test['pathology'].map(label_mapping)
 calc_train['pathology'] = calc_train['pathology'].map(label_mapping)
@@ -384,10 +398,20 @@ display_images('cropped_image_file_path', 5)
 print('ROI Images:\n')
 display_images('ROI_mask_file_path', 5)
 
+# Combine mass_train_data and calc_train_data into mam_train_data
+mam_train_data = pd.concat([mass_train_data, calc_train_data], ignore_index=True)
+
+# Combine mass_test_data and calc_test_data into mam_test_data
+mam_test_data = pd.concat([mass_test_data, calc_test_data], ignore_index=True)
+
+# Optional: Reset the index of the combined DataFrames
+mam_train_data.reset_index(drop=True, inplace=True)
+mam_test_data.reset_index(drop=True, inplace=True)
+
 """##### V. Data Preprocessing"""
 
 # Assuming 'mass_train' and 'calc_train' are your DataFrames
-
+# Update BreastCancerDataset constructor to print unique values in 'pathology' column before mapping
 class BreastCancerDataset(Dataset):
     def __init__(self, dataframe, transform=None):
         self.data = dataframe
@@ -397,7 +421,7 @@ class BreastCancerDataset(Dataset):
         print("Unique Labels Before Mapping:", self.data['pathology'].unique())
 
         # Map label values to integers
-        self.labels = torch.tensor(self.data['pathology'].fillna(0).astype(int).values, dtype=torch.long)
+        self.labels = torch.tensor(self.data['pathology'].map({'MALIGNANT': 1, 'BENIGN': 0, 'BENIGN_WITHOUT_CALLBACK': 0}).fillna(0).astype(int).values, dtype=torch.long)
 
         # Print unique values in the "pathology" column after mapping
         print("Unique Labels After Mapping:", self.data['pathology'].unique())
@@ -416,9 +440,13 @@ class BreastCancerDataset(Dataset):
         img_name = self.data.iloc[idx, 11]  # Full mammogram image
         mask_name = self.data.iloc[idx, 13]  # ROI mask
 
+        # If image is missing, return None
+        if pd.isnull(img_name):
+            return None
+
         # Handle missing mask values
         if pd.isnull(mask_name):
-            mask = Image.new("L", (224, 224))  # Create a black image (grayscale)
+            mask = None
         else:
             mask = Image.open(mask_name).convert("L")  # Ensure mask is grayscale
 
@@ -427,15 +455,17 @@ class BreastCancerDataset(Dataset):
         # Apply transforms separately for image and mask
         if self.transform is not None:
             image = self.transform(image)
+            if mask is not None:
+                mask = self.transform(mask)
 
-        # Transform for the mask (no normalization)
-        mask_transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor()
-        ])
-        mask = mask_transform(mask)
+        # Convert mask to binary (0, 1)
+        if mask is not None:
+            mask = torch.where(mask > 0.5, torch.tensor(1), torch.tensor(0))
 
-        return image, mask, self.labels[idx]
+        # Extract label from dataframe
+        label = self.labels[idx]
+
+        return image, mask, label
 
 # Define transforms
 transform = transforms.Compose([
@@ -445,8 +475,8 @@ transform = transforms.Compose([
 ])
 
 # Initialize datasets and dataloaders
-train_dataset = BreastCancerDataset(dataframe=mass_train, transform=transform)
-test_dataset = BreastCancerDataset(dataframe=mass_test, transform=transform)
+train_dataset = BreastCancerDataset(dataframe=mam_train_data, transform=transform)
+test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=transform)
 
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
