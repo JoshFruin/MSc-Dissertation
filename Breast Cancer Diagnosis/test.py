@@ -247,7 +247,7 @@ print(calc_test.isnull().sum())
 mass_train['pathology'].value_counts().plot(kind='bar')
 calc_train['pathology'].value_counts().plot(kind='bar')
 
-label_mapping = {'BENIGN': 0, 'MALIGNANT': 1}
+label_mapping = {'BENIGN': 0,'BENIGN_WITHOUT_CALLBACK': 0, 'MALIGNANT': 1}
 mass_train['pathology'] = mass_train['pathology'].map(label_mapping)
 mass_test['pathology'] = mass_test['pathology'].map(label_mapping)
 calc_train['pathology'] = calc_train['pathology'].map(label_mapping)
@@ -398,10 +398,20 @@ display_images('cropped_image_file_path', 5)
 print('ROI Images:\n')
 display_images('ROI_mask_file_path', 5)
 
+# Combine mass_train_data and calc_train_data into mam_train_data
+mam_train_data = pd.concat([mass_train_data, calc_train_data], ignore_index=True)
+
+# Combine mass_test_data and calc_test_data into mam_test_data
+mam_test_data = pd.concat([mass_test_data, calc_test_data], ignore_index=True)
+
+# Optional: Reset the index of the combined DataFrames
+mam_train_data.reset_index(drop=True, inplace=True)
+mam_test_data.reset_index(drop=True, inplace=True)
+
 """##### V. Data Preprocessing"""
 
 # Assuming 'mass_train' and 'calc_train' are your DataFrames
-
+# Update BreastCancerDataset constructor to print unique values in 'pathology' column before mapping
 class BreastCancerDataset(Dataset):
     def __init__(self, dataframe, transform=None):
         self.data = dataframe
@@ -411,7 +421,7 @@ class BreastCancerDataset(Dataset):
         print("Unique Labels Before Mapping:", self.data['pathology'].unique())
 
         # Map label values to integers
-        self.labels = torch.tensor(self.data['pathology'].fillna(0).astype(int).values, dtype=torch.long)
+        self.labels = torch.tensor(self.data['pathology'].map({'MALIGNANT': 1, 'BENIGN': 0, 'BENIGN_WITHOUT_CALLBACK': 0}).fillna(0).astype(int).values, dtype=torch.long)
 
         # Print unique values in the "pathology" column after mapping
         print("Unique Labels After Mapping:", self.data['pathology'].unique())
@@ -465,8 +475,8 @@ transform = transforms.Compose([
 ])
 
 # Initialize datasets and dataloaders
-train_dataset = BreastCancerDataset(dataframe=mass_train, transform=transform)
-test_dataset = BreastCancerDataset(dataframe=mass_test, transform=transform)
+train_dataset = BreastCancerDataset(dataframe=mam_train_data, transform=transform)
+test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=transform)
 
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)

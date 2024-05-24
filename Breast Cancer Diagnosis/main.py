@@ -13,6 +13,8 @@ from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 
+# Imports within the project
+from data_visualisations import visualise_data, dataloader_visualisations
 
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
@@ -268,136 +270,6 @@ mass_test['pathology'] = mass_test['pathology'].astype(int)
 calc_train['pathology'] = calc_train['pathology'].astype(int)
 calc_test['pathology'] = calc_test['pathology'].astype(int)
 
-"""##### III. Data Visualization"""
-
-# quantitative summary of features
-print(mass_train.describe())
-print(calc_train.describe())
-
-# check datasets shape
-print(f'Shape of mass_train: {mass_train.shape}')
-print(f'Shape of mass_test: {mass_test.shape}')
-
-# check datasets shape
-print(f'Shape of calc_train: {calc_train.shape}')
-print(f'Shape of calc_test: {calc_test.shape}')
-
-# pathology distributions
-value = mass_train['pathology'].value_counts() + calc_train['pathology'].value_counts()
-plt.figure(figsize=(8,6))
-plt.pie(value, labels=value.index, autopct='%1.1f%%')
-plt.title('Breast Cancer Mass Types', fontsize=12)
-plt.show()
-
-# Set the color palette for mass_train
-mass_palette = sns.color_palette("viridis", n_colors=len(mass_train['assessment'].unique()))
-sns.countplot(data=mass_train, y='assessment', hue='pathology', palette=mass_palette)
-plt.title('Count Plot for mass_train')
-plt.show()
-
-# Set the color palette for calc_train
-calc_palette = sns.color_palette("magma", n_colors=len(calc_train['assessment'].unique()))
-sns.countplot(data=calc_train, y='assessment', hue='pathology', palette=calc_palette)
-plt.title('Count Plot for calc_train')
-plt.show()
-
-plt.figure(figsize=(8, 6))
-sns.countplot(data=mass_train, x='subtlety', palette='viridis', hue='subtlety')
-plt.title('Breast Cancer Mass Subtlety', fontsize=12)
-plt.xlabel('Subtlety Grade')
-plt.ylabel('Count')
-plt.show()
-
-plt.figure(figsize=(8, 6))
-sns.countplot(data=calc_train, x='subtlety', palette='magma', hue='subtlety')
-plt.title('Breast Cancer Calc Subtlety', fontsize=12)
-plt.xlabel('Subtlety Grade')
-plt.ylabel('Count')
-plt.show()
-
-# view breast mass shape distribution against pathology
-plt.figure(figsize=(8,6))
-sns.countplot(mass_train, x='mass_shape', hue='pathology')
-plt.title('Mass Shape Distribution by Pathology', fontsize=14)
-plt.xlabel('Mass Shape')
-plt.xticks(rotation=30, ha='right')
-plt.ylabel('Pathology Count')
-plt.legend()
-plt.show()
-
-plt.figure(figsize=(12, 8))
-sns.countplot(data=calc_train, y='calc_type', hue='pathology', palette='viridis')
-plt.title('Calcification Type Distribution by Pathology', fontsize=14)
-plt.xlabel('Pathology Count')
-plt.ylabel('Calc Type')
-# Adjust the rotation of the y-axis labels
-plt.yticks(rotation=0, ha='right')
-# Move the legend outside the plot for better visibility
-plt.legend(loc='upper right', bbox_to_anchor=(1.25, 1))
-plt.show()
-
-# breast density against pathology
-plt.figure(figsize=(8,6))
-sns.countplot(mass_train, x='breast_density', hue='pathology')
-plt.title('Breast Density vs Pathology\n\n1: fatty || 2: Scattered Fibroglandular Density\n3: Heterogenously Dense || 4: Extremely Dense',fontsize=14)
-plt.xlabel('Density Grades')
-plt.ylabel('Count')
-plt.legend()
-plt.show()
-
-# breast density against pathology
-plt.figure(figsize=(8,6))
-
-sns.countplot(calc_train, x='breast_density', hue='pathology')
-plt.title('Breast Density vs Pathology\n\n1: fatty || 2: Scattered Fibroglandular Density\n3: Heterogenously Dense || 4: Extremely Dense',
-          fontsize=14)
-plt.xlabel('Density Grades')
-plt.ylabel('Count')
-plt.legend()
-plt.show()
-
-print(mass_train.head())
-print(calc_train.head())
-
-def display_images(column, number):
-    """Displays images in the dataset, handling missing files."""
-    number_to_visualize = number
-
-    fig = plt.figure(figsize=(15, 5))
-
-    for index, row in mass_train.head(number_to_visualize).iterrows():
-        image_path = row[column]
-        # print(image_path) # Uncomment this to see printed file paths
-
-        if os.path.exists(image_path):
-            image = mpimg.imread(image_path)
-            # create axes and display image
-            ax = fig.add_subplot(1, number_to_visualize, index + 1)
-            ax.imshow(image, cmap='gray')
-            ax.set_title(f"{row['pathology']}")
-            ax.axis('off')
-        else:
-            print(f"File not found: {image_path}")  # Log missing files
-
-    plt.tight_layout()
-    plt.show()
-
-print('Mass Training Dataset\n\n')
-print('Full Mammograms:\n')
-display_images('image_file_path', 5)
-print('Cropped Mammograms:\n')
-display_images('cropped_image_file_path', 5)
-print('ROI Images:\n')
-display_images('ROI_mask_file_path', 5)
-
-print('Calc Training Dataset\n\n')
-print('Full Mammograms:\n')
-display_images('image_file_path', 5)
-print('Cropped Mammograms:\n')
-display_images('cropped_image_file_path', 5)
-print('ROI Images:\n')
-display_images('ROI_mask_file_path', 5)
-
 # Combine mass_train_data and calc_train_data into mam_train_data
 mam_train_data = pd.concat([mass_train_data, calc_train_data], ignore_index=True)
 
@@ -408,7 +280,14 @@ mam_test_data = pd.concat([mass_test_data, calc_test_data], ignore_index=True)
 mam_train_data.reset_index(drop=True, inplace=True)
 mam_test_data.reset_index(drop=True, inplace=True)
 
-"""##### V. Data Preprocessing"""
+# Data Visualization
+visualisation_choice = int(input("Do you want to visualize the data? (1 for yes, 0 for no): "))
+if visualisation_choice == 1:
+    visualise_data(mass_train, calc_train)
+else:
+    print("Data visualisation skipped.")
+
+""" Data Preprocessing"""
 
 # Assuming 'mass_train' and 'calc_train' are your DataFrames
 # Update BreastCancerDataset constructor to print unique values in 'pathology' column before mapping
@@ -481,64 +360,12 @@ test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=transform)
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-# Visualization functions
-def show_images(dataset, num_images=5):
-    fig, axes = plt.subplots(2, num_images, figsize=(15, 6))
-    for i in range(num_images):
-        image, mask, label = dataset[i]
-        axes[0, i].imshow(image.squeeze(), cmap='gray')
-        axes[0, i].set_title(f"Label: {label}")
-        axes[0, i].axis('off')
-
-        axes[1, i].imshow(mask.squeeze(), cmap='gray')
-        axes[1, i].set_title("Mask")
-        axes[1, i].axis('off')
-    plt.show()
-
-def visualize_batch(dataloader, num_images_to_display=4):
-    images, masks, labels = next(iter(dataloader))
-    num_images = min(num_images_to_display, len(images))
-    fig, axes = plt.subplots(2, num_images, figsize=(15, 6))
-    for i in range(num_images):
-        axes[0, i].imshow(images[i].squeeze().cpu().numpy(), cmap='gray')
-        axes[0, i].set_title(f"Label: {labels[i].item()}")
-        axes[0, i].axis('off')
-
-        axes[1, i].imshow(masks[i].squeeze().cpu().numpy(), cmap='gray')
-        axes[1, i].set_title(f"Mask {i+1}")
-        axes[1, i].axis('off')
-
-    plt.tight_layout()
-    plt.show()
-
-# Display images from the training dataset
-print("Training Dataset:")
-show_images(train_dataset)
-
-# Display images from the test dataset
-print("Test Dataset:")
-show_images(test_dataset)
-
-# Visualize a batch of data from the training dataloader
-print("Training Dataloader:")
-visualize_batch(train_loader)
-
-# Visualize a batch of data from the test dataloader
-print("Test Dataloader:")
-visualize_batch(test_loader)
-
-# Step 3: Check Dataloader Output
-images, masks, labels = next(iter(train_loader))
-print("Training Dataloader Output:")
-print(f"Images Shape: {images.shape}")
-print(f"Masks Shape: {masks.shape}")
-print(f"Labels Shape: {labels.shape}")
-
-images, masks, labels = next(iter(test_loader))
-print("Test Dataloader Output:")
-print(f"Images Shape: {images.shape}")
-print(f"Masks Shape: {masks.shape}")
-print(f"Labels Shape: {labels.shape}")
+# Call dataloader_visualisations function
+visualisation_choice_2 = int(input("Do you want to visualise the dataloader? (1 for yes, 0 for no): "))
+if visualisation_choice_2 == 1:
+    dataloader_visualisations(train_dataset, test_dataset, train_loader, test_loader)
+else:
+    print("Dataloader visualisation skipped.")
 
 # Define SimpleCNN with grayscale support
 class SimpleCNN(nn.Module):
@@ -569,6 +396,7 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 num_epochs = 1
 
+print("Training...")
 for epoch in range(num_epochs):
     model.train()
     running_loss = 0.0
