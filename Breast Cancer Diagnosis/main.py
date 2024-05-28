@@ -12,12 +12,18 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
+from tqdm import tqdm  # Import tqdm for progress bars
 
 # Imports within the project
 from data_visualisations import visualise_data, dataloader_visualisations
+from models import SimpleCNN, ResNetClassifier, UNet, VGGClassifier
 
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
+
+"""
+For the mammograms we're using the CBIS-DDSM dataset from Kaggle: https://www.kaggle.com/datasets/awsaf49/cbis-ddsm-breast-cancer-image-dataset/data
+"""
 
 # Provide the correct path to the CSV files
 csv_path_meta = 'C:/Users/jafru/OneDrive - University of Plymouth/MSc Dissertation/cbis-ddsm-breast-cancer-image-dataset/csv/meta.csv'
@@ -47,6 +53,8 @@ print(dicom_data.head())
 
 # Define the image directory
 image_dir = 'C:/Users/jafru/OneDrive - University of Plymouth/MSc Dissertation/cbis-ddsm-breast-cancer-image-dataset/jpeg'
+
+"""Data Cleaning & Preprocessing"""
 
 # Function to fix paths in the DataFrame
 def fix_image_paths(df, image_dir):
@@ -146,8 +154,6 @@ calc_test_data = fix_image_path_calc(calc_test_data, full_mammogram_dict, croppe
 # Check the updated DataFrames (optional, for checking)
 print(calc_train_data.head())
 print(calc_test_data.head())
-
-"""##### II. Data Cleaning"""
 
 # check unique values in pathology column
 mass_train_data.pathology.unique()
@@ -287,9 +293,6 @@ if visualisation_choice == 1:
 else:
     print("Data visualisation skipped.")
 
-""" Data Preprocessing"""
-
-# Assuming 'mass_train' and 'calc_train' are your DataFrames
 # Update BreastCancerDataset constructor to print unique values in 'pathology' column before mapping
 class BreastCancerDataset(Dataset):
     def __init__(self, dataframe, transform=None):
@@ -367,31 +370,15 @@ if visualisation_choice_2 == 1:
 else:
     print("Dataloader visualisation skipped.")
 
-# Define SimpleCNN with grayscale support
-class SimpleCNN(nn.Module):
-    def __init__(self, num_classes=2):
-        super(SimpleCNN, self).__init__()
-        self.conv1 = nn.Conv2d(2, 32, kernel_size=3, stride=1, padding=1)  # Adjusted for 2 channels (image + mask)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
-        self.fc1 = nn.Linear(128*28*28, 256)
-        self.fc2 = nn.Linear(256, num_classes)
-
-    def forward(self, x, mask):
-        x = torch.cat((x, mask), dim=1)  # Concatenate along the channel dimension
-        x = nn.ReLU()(self.conv1(x))
-        x = nn.MaxPool2d(kernel_size=2, stride=2)(x)
-        x = nn.ReLU()(self.conv2(x))
-        x = nn.MaxPool2d(kernel_size=2, stride=2)(x)
-        x = nn.ReLU()(self.conv3(x))
-        x = nn.MaxPool2d(kernel_size=2, stride=2)(x)
-        x = x.view(x.size(0), -1)
-        x = nn.ReLU()(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = SimpleCNN(num_classes=2).to(device)
+# Use the UNet model
+#model = UNet(in_channels=1, out_channels=1).to(device)
+# Use the ResNet model
+#model = ResNetClassifier(num_classes=2).to(device)
+# Use the VGG model
+#model = VGGClassifier(num_classes=2).to(device)
+
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 num_epochs = 1
@@ -400,7 +387,7 @@ print("Training...")
 for epoch in range(num_epochs):
     model.train()
     running_loss = 0.0
-    for i, (images, masks, labels) in enumerate(train_loader):
+    for i, (images, masks, labels) in enumerate(tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs}')):
         images, masks, labels = images.to(device), masks.to(device), labels.to(device)
         optimizer.zero_grad()
         outputs = model(images, masks)
