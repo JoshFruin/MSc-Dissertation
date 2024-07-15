@@ -451,6 +451,7 @@ model = HybridModel(num_classes=2).to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 num_epochs = 1
+best_accuracy = 0.0
 
 print("Training...")
 for epoch in range(num_epochs):
@@ -467,6 +468,26 @@ for epoch in range(num_epochs):
         running_loss += loss.item()
 
     print(f'Epoch {epoch+1}/{num_epochs}, Loss: {running_loss/len(train_graph_loader)}')
+
+    # Evaluation on test set
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, masks, labels in test_loader:
+            images, masks, labels = images.to(device), masks.to(device), labels.to(device)
+            outputs = model(images, masks)
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+    accuracy = 100 * correct / total
+    print(f'Accuracy of the model on the test images: {accuracy}%')
+
+    # Save the model if it has the best accuracy so far
+    if accuracy > best_accuracy:
+        best_accuracy = accuracy
+        torch.save(model.state_dict(), 'best_model.pth')
 
 
 """print("Training...")
