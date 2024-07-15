@@ -2,6 +2,56 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
+from torchvision.models import vit_b_16
+import torch_geometric.nn as pyg_nn
+from transformers import ViTModel
+import dgl
+import dgl.nn.pytorch as dglnn
+from torch_geometric.nn import GCNConv, global_mean_pool
+from torch_geometric.data import Data
+
+class ViTClassifier(nn.Module):
+    def __init__(self, num_classes=2):
+        super(ViTClassifier, self).__init__()
+        self.vit = models.vit_b_16(pretrained=True)
+        # Find the number of input features for the classifier head
+        in_features = self.vit.heads[0].in_features
+        # Replace the classifier head
+        self.vit.heads = nn.Sequential(
+            nn.Linear(in_features, num_classes)
+        )
+
+    def forward(self, x):
+        return self.vit(x)
+
+class GCN(nn.Module):
+    def __init__(self, num_node_features, num_classes):
+        super(GCN, self).__init__()
+        self.conv1 = GCNConv(num_node_features, 16)
+        self.conv2 = GCNConv(16, num_classes)
+
+    def forward(self, x, edge_index, batch):
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = self.conv2(x, edge_index)
+        return global_mean_pool(x, batch)  # Global pooling
+
+class HybridModel(nn.Module):
+    def __init__(self, num_classes):
+        super(HybridModel, self).__init__()
+        self.vit = models.vit_b_16(pretrained=True)  # Replace with your ViT model
+        self.fc = nn.Linear(1000, num_classes)  # Assuming ViT outputs 1000 features
+
+    def forward(self, x, edge_index=None, batch=None):
+        if x.dim() == 2:  # If input is 2D, reshape it to 4D
+            n = int(torch.sqrt(torch.tensor(x.shape[0])))
+            x = x.view(1, 1, n, n)  # Assuming input is square and grayscale
+        elif x.dim() == 3:  # If input is 3D, reshape it to 4D
+            x = x.unsqueeze(0)
+        vit_out = self.vit(x)
+        out = self.fc(vit_out)
+        return out
+
 
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes=2):

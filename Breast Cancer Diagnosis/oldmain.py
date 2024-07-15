@@ -16,7 +16,7 @@ from tqdm import tqdm  # Import tqdm for progress bars
 
 # Imports within the project
 from data_visualisations import visualise_data, dataloader_visualisations
-from models import SimpleCNN, ResNetClassifier, UNet, VGGClassifier, HybridModel
+from models import SimpleCNN, ResNetClassifier, UNet, VGGClassifier
 
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
@@ -287,7 +287,7 @@ mam_train_data.reset_index(drop=True, inplace=True)
 mam_test_data.reset_index(drop=True, inplace=True)
 
 # Data Visualization
-visualisation_choice = int(input("Do you want to visualise the data? (1 for yes, 0 for no): "))
+visualisation_choice = int(input("Do you want to visualize the data? (1 for yes, 0 for no): "))
 if visualisation_choice == 1:
     visualise_data(mass_train, calc_train)
 else:
@@ -334,9 +334,6 @@ class BreastCancerDataset(Dataset):
 
         image = Image.open(img_name).convert("L")  # Ensure image is grayscale
 
-        # Convert grayscale image to 3 channels by replicating the single channel
-        image = image.convert("RGB")
-
         # Apply transforms separately for image and mask
         if self.transform is not None:
             image = self.transform(image)
@@ -351,60 +348,6 @@ class BreastCancerDataset(Dataset):
         label = self.labels[idx]
 
         return image, mask, label
-
-
-# Additional imports for GNN
-from torch_geometric.data import Data, DataLoader as GeometricDataLoader
-
-def create_graph_data(images, masks, labels):
-    data_list = []
-
-    for i in range(len(images)):
-        # Ensure the image is in 4D
-        if images[i].dim() == 2:  # If the image is 2D, add batch and channel dimensions
-            images[i] = images[i].unsqueeze(0).unsqueeze(0)
-        elif images[i].dim() == 3:  # If the image is 3D, add the batch dimension
-            images[i] = images[i].unsqueeze(0)
-
-        # Flatten the image and mask to create node features
-        x = images[i].view(-1, images[i].shape[-1])  # Flatten the last dimension
-
-        # Create edge_index
-        edge_index = create_grid_edge_index(images[i].shape[-2], images[i].shape[-1])
-
-        # Create graph data
-        data = Data(x=x, edge_index=edge_index, y=labels[i])
-
-        # If you have masks, you can also use them to create additional features or weights for edges
-        if masks[i] is not None:
-            if masks[i].dim() == 2:  # If the mask is 2D, add batch and channel dimensions
-                masks[i] = masks[i].unsqueeze(0).unsqueeze(0)
-            elif masks[i].dim() == 3:  # If the mask is 3D, add the batch dimension
-                masks[i] = masks[i].unsqueeze(0)
-            mask = masks[i].view(-1, masks[i].shape[-1])
-            data.mask = mask
-
-        data_list.append(data)
-
-    return data_list
-
-def create_grid_edge_index(height, width):
-    row, col = torch.meshgrid(torch.arange(height), torch.arange(width))
-    row, col = row.flatten(), col.flatten()
-
-    # Create horizontal edges
-    right = torch.stack([row[:-1], row[1:]], dim=0)
-    bottom = torch.stack([col[:-1], col[1:]], dim=0)
-
-    # Create vertical edges
-    down = torch.stack([row[:-width], row[width:]], dim=0)
-    bottom = torch.stack([col[:-width], col[width:]], dim=0)
-
-    # Combine horizontal and vertical edges
-    edge_index = torch.cat([right, down], dim=1)
-
-    return edge_index
-
 
 # Define transforms
 transform = transforms.Compose([
@@ -427,26 +370,14 @@ if visualisation_choice_2 == 1:
 else:
     print("Dataloader visualisation skipped.")
 
-for i in range(10):
-    print(train_dataset[i])
-
-# Creating graph data
-import time
-
-start_time = time.time()
-train_graph_data = create_graph_data([data[0] for data in train_dataset], [data[1] for data in train_dataset], train_dataset.labels)
-end_time = time.time()
-print(f"Time taken: {end_time - start_time} seconds")
-
-test_graph_data = create_graph_data([data[0] for data in test_dataset], [data[1] for data in test_dataset],
-                                    test_dataset.labels)
-
-train_graph_loader = GeometricDataLoader(train_graph_data, batch_size=32, shuffle=True)
-test_graph_loader = GeometricDataLoader(test_graph_data, batch_size=32, shuffle=False)
-
-# Model setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = HybridModel(num_classes=2).to(device)
+model = SimpleCNN(num_classes=2).to(device)
+# Use the UNet model
+#model = UNet(in_channels=1, out_channels=1).to(device)
+# Use the ResNet model
+#model = ResNetClassifier(num_classes=2).to(device)
+# Use the VGG model
+#model = VGGClassifier(num_classes=2).to(device)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
@@ -456,28 +387,11 @@ print("Training...")
 for epoch in range(num_epochs):
     model.train()
     running_loss = 0.0
-    for i, batch in enumerate(tqdm(train_graph_loader, desc=f'Epoch {epoch + 1}/{num_epochs}')):
+    for i, (images, masks, labels) in enumerate(tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs}')):
+        images, masks, labels = images.to(device), masks.to(device), labels.to(device)
         optimizer.zero_grad()
-        images = batch.x.view(batch.batch.max().item() + 1, -1, 224, 224).to(device)  # Ensure the input is 4D
-        labels = batch.y.to(device)
-        outputs = model(images)
+        outputs = model(images, masks)
         loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-        running_loss += loss.item()
-
-    print(f'Epoch {epoch+1}/{num_epochs}, Loss: {running_loss/len(train_graph_loader)}')
-
-
-"""print("Training...")
-for epoch in range(num_epochs):
-    model.train()
-    running_loss = 0.0
-    for i, batch in enumerate(tqdm(train_graph_loader, desc=f'Epoch {epoch + 1}/{num_epochs}')):
-        batch = batch.to(device)
-        optimizer.zero_grad()
-        outputs = model(batch.x, batch.edge_index, batch.batch)
-        loss = criterion(outputs, batch.y)
         loss.backward()
         optimizer.step()
         running_loss += loss.item()
@@ -487,19 +401,19 @@ for epoch in range(num_epochs):
         correct = 0
         total = 0
         val_loss = 0.0
-        for batch in test_graph_loader:
-            batch = batch.to(device)
-            outputs = model(batch.x, batch.edge_index, batch.batch)
-            loss = criterion(outputs, batch.y)
+        for images, masks, labels in test_loader:
+            images, masks, labels = images.to(device), masks.to(device), labels.to(device)
+            outputs = model(images, masks)
+            loss = criterion(outputs, labels)
             val_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
-            total += batch.y.size(0)
-            correct += (predicted == batch.y).sum().item()
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
 
         accuracy = 100 * correct / total
         print(f'Epoch [{epoch + 1}/{num_epochs}], '
-              f'Training Loss: {running_loss / len(train_graph_loader):.4f}, ',
-              f'Validation Loss: {val_loss / len(test_graph_loader):.4f}, ',
+              f'Training Loss: {running_loss / len(train_loader):.4f}, '
+              f'Validation Loss: {val_loss / len(test_loader):.4f}, '
               f'Accuracy: {accuracy:.2f}%')
 
-print('Finished Training')"""
+print('Finished Training')

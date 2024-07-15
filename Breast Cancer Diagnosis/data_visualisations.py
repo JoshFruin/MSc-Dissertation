@@ -111,7 +111,21 @@ def visualise_data(mass_train, calc_train):
     display_images('ROI_mask_file_path', 5)
 
 def show_images(dataset, num_images=5):
-    fig, axes = plt.subplots(2, num_images, figsize=(15, 6))
+    def show_images(dataset, num_images=5):
+        fig, axes = plt.subplots(2, num_images, figsize=(15, 6))
+        for i in range(num_images):
+            image, mask, label = dataset[i]
+            # Display the first channel of the image (assuming it's RGB)
+            axes[0, i].imshow(image[0], cmap='gray')
+            axes[0, i].set_title(f"Label: {label}")
+            axes[0, i].axis('off')
+
+            axes[1, i].imshow(mask.squeeze(), cmap='gray')
+            axes[1, i].set_title("Mask")
+            axes[1, i].axis('off')
+        plt.show()
+
+    """fig, axes = plt.subplots(2, num_images, figsize=(15, 6))
     for i in range(num_images):
         image, mask, label = dataset[i]
         axes[0, i].imshow(image.squeeze(), cmap='gray')
@@ -121,23 +135,29 @@ def show_images(dataset, num_images=5):
         axes[1, i].imshow(mask.squeeze(), cmap='gray')
         axes[1, i].set_title("Mask")
         axes[1, i].axis('off')
-    plt.show()
+    plt.show()"""
 
-def visualize_batch(dataloader, num_images_to_display=4):
-    images, masks, labels = next(iter(dataloader))
-    num_images = min(num_images_to_display, len(images))
+def visualize_batch(dataloader, num_images=5):
+    dataiter = iter(dataloader)
+    images, masks, labels = next(dataiter)
+
     fig, axes = plt.subplots(2, num_images, figsize=(15, 6))
+
     for i in range(num_images):
-        axes[0, i].imshow(images[i].squeeze().cpu().numpy(), cmap='gray')
-        axes[0, i].set_title(f"Label: {labels[i].item()}")
+        # Display the first channel of the image (assuming it's RGB)
+        axes[0, i].imshow(images[i][0].cpu().numpy(), cmap='gray')
+        axes[0, i].set_title(f"Label: {labels[i]}")
         axes[0, i].axis('off')
 
-        axes[1, i].imshow(masks[i].squeeze().cpu().numpy(), cmap='gray')
-        axes[1, i].set_title(f"Mask {i+1}")
-        axes[1, i].axis('off')
+        if masks is not None:  # Check if masks are available
+            # Display the mask
+            axes[1, i].imshow(masks[i].squeeze().cpu().numpy(), cmap='gray')
+            axes[1, i].set_title("Mask")
+            axes[1, i].axis('off')
 
     plt.tight_layout()
     plt.show()
+
 
 def dataloader_visualisations(train_dataset, test_dataset, train_loader, test_loader):
     print("Training Dataset:")
