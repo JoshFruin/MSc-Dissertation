@@ -11,13 +11,15 @@ from torch_geometric.nn import GCNConv, global_mean_pool
 from torch_geometric.data import Data
 
 class ViTClassifier(nn.Module):
-    def __init__(self, num_classes=2):
+    def __init__(self, num_classes=2, in_channels=1):  # Added in_channels parameter
         super(ViTClassifier, self).__init__()
         self.vit = models.vit_b_16(pretrained=True)
-        # Find the number of input features for the classifier head
+        # Modify first layer for single-channel input
+        self.vit.conv_proj = nn.Conv2d(in_channels, self.vit.hidden_dim, kernel_size=(16, 16), stride=(16, 16))
+        # Update classifier head
         in_features = self.vit.heads[0].in_features
-        # Replace the classifier head
         self.vit.heads = nn.Sequential(
+            nn.Dropout(0.2),  # Add dropout for regularization
             nn.Linear(in_features, num_classes)
         )
 
@@ -51,7 +53,6 @@ class HybridModel(nn.Module):
         vit_out = self.vit(x)
         out = self.fc(vit_out)
         return out
-
 
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes=2):

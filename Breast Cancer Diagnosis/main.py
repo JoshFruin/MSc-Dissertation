@@ -406,13 +406,16 @@ transform = transforms.Compose([
 ])
 
 # Use a smaller subset of the dataset for initial experiments
-sample_size = 500  # Adjust this number based on your needs
+sample_size = 30  # Can go up to 300 from testing but not 400
 mam_train_data_sample = mam_train_data.sample(n=sample_size, random_state=42)
 mam_test_data_sample = mam_test_data.sample(n=sample_size, random_state=42)
 
 # Initialize datasets and dataloaders
-train_dataset = BreastCancerDataset(dataframe=mam_train_data_sample, transform=transform)
-test_dataset = BreastCancerDataset(dataframe=mam_test_data_sample, transform=transform)
+train_dataset = BreastCancerDataset(dataframe=mam_train_data, transform=transform)
+test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=transform)
+
+"""train_dataset = BreastCancerDataset(dataframe=mam_train_data_sample, transform=transform)
+test_dataset = BreastCancerDataset(dataframe=mam_test_data_sample, transform=transform)"""
 
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
@@ -446,7 +449,9 @@ model = HybridModel(num_classes=2).to(device)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-num_epochs = 1
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)  # StepLR scheduler
+
+num_epochs = 5
 best_accuracy = 0.0
 
 print("Training...")
@@ -464,23 +469,79 @@ for epoch in range(num_epochs):
         running_loss += loss.item()
 
     print(f'Epoch {epoch+1}/{num_epochs}, Loss: {running_loss/len(train_graph_loader)}')
+    # Step the scheduler after each epoch (for StepLR)
+    scheduler.step()
 
-    # Evaluation on test set
-    model.eval()
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        for images, masks, labels in test_loader:
-            images, masks, labels = images.to(device), masks.to(device), labels.to(device)
-            outputs = model(images, masks)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score, matthews_corrcoef
 
-    accuracy = 100 * correct / total
-    print(f'Accuracy of the model on the test images: {accuracy}%')
+# Evaluation on test set
+model.eval()
+y_true = []
+y_pred = []
+y_scores = []
 
-    # Save the model if it has the best accuracy so far
-    if accuracy > best_accuracy:
-        best_accuracy = accuracy
-        torch.save(model.state_dict(), 'best_model.pth')
+with torch.no_grad():
+    for images, masks, labels in test_loader:
+        images, masks, labels = images.to(device), masks.to(device), labels.to(device)
+        outputs = model(images, masks)
+        _, predicted = torch.max(outputs.data, 1)
+
+        y_true.extend(labels.cpu().numpy())
+        y_pred.extend(predicted.cpu().numpy())
+        y_scores.extend(outputs[:, 1].cpu().numpy())  # Assuming the second column is the score for class 1 (malignant)
+
+# Convert lists to numpy arrays
+y_true = np.array(y_true)
+y_pred = np.array(y_pred)
+y_scores = np.array(y_scores)
+
+# Calculate metrics
+accuracy = 100 * (y_true == y_pred).sum() / len(y_true)
+precision = precision_score(y_true, y_pred)
+recall = recall_score(y_true, y_pred)
+f1 = f1_score(y_true, y_pred)
+specificity = recall_score(y_true, y_pred, pos_label=0)
+auc_roc = roc_auc_score(y_true, y_scores)
+auc_pr = average_precision_score(y_true, y_scores)
+cm = confusion_matrix(y_true, y_pred)
+
+print(f'Accuracy: {accuracy:.2f}%')
+print(f'Precision: {precision:.2f}')
+print(f'Recall: {recall:.2f}')
+print(f'F1 Score: {f1:.2f}')
+print(f'Specificity: {specificity:.2f}')
+print(f'AUC-ROC: {auc_roc:.2f}')
+print(f'AUC-PR: {auc_pr:.2f}')
+print(f'Confusion Matrix:\n{cm}')
+
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, precision_recall_curve
+
+# ROC Curve
+fpr, tpr, _ = roc_curve(y_true, y_scores)
+plt.figure()
+plt.plot(fpr, tpr, color='darkorange', lw=2)
+plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver Operating Characteristic')
+plt.show()
+
+# Precision-Recall Curve
+precision, recall, _ = precision_recall_curve(y_true, y_scores)
+plt.figure()
+plt.plot(recall, precision, color='darkorange', lw=2)
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.title('Precision-Recall Curve')
+plt.show()
+
+
+"""# Save the model if it has the best accuracy so far
+if accuracy > best_accuracy:
+    best_accuracy = accuracy
+    torch.save(model.state_dict(), 'best_model.pth')"""
