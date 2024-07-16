@@ -21,6 +21,10 @@ from models import SimpleCNN, ResNetClassifier, UNet, VGGClassifier, HybridModel
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
 
+#Set up device agnostic code
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(device)
+
 """
 For the mammograms we're using the CBIS-DDSM dataset from Kaggle: https://www.kaggle.com/datasets/awsaf49/cbis-ddsm-breast-cancer-image-dataset/data
 """
@@ -350,61 +354,49 @@ class BreastCancerDataset(Dataset):
         # Extract label from dataframe
         label = self.labels[idx]
 
-        return image, mask, label
+        return image.to(device), mask.to(device) if mask is not None else mask, label.to(device)
 
 
 # Additional imports for GNN
 from torch_geometric.data import Data, DataLoader as GeometricDataLoader
 
+from torch_geometric.data import Data
+from torch_geometric.utils import grid
+
+# Creating graph data
 def create_graph_data(images, masks, labels):
     data_list = []
-
     for i in range(len(images)):
-        # Ensure the image is in 4D
-        if images[i].dim() == 2:  # If the image is 2D, add batch and channel dimensions
-            images[i] = images[i].unsqueeze(0).unsqueeze(0)
-        elif images[i].dim() == 3:  # If the image is 3D, add the batch dimension
-            images[i] = images[i].unsqueeze(0)
-
-        # Flatten the image and mask to create node features
-        x = images[i].view(-1, images[i].shape[-1])  # Flatten the last dimension
-
-        # Create edge_index
-        edge_index = create_grid_edge_index(images[i].shape[-2], images[i].shape[-1])
-
-        # Create graph data
+        image = images[i]
+        mask = masks[i] if masks[i] is not None else None
+        if image.dim() == 2:
+            image = image.unsqueeze(0).unsqueeze(0)
+        elif image.dim() == 3:
+            image = image.unsqueeze(0)
+        x = image.view(-1, image.shape[-1])
+        edge_index = grid(image.shape[-2], image.shape[-1])
         data = Data(x=x, edge_index=edge_index, y=labels[i])
-
-        # If you have masks, you can also use them to create additional features or weights for edges
-        if masks[i] is not None:
-            if masks[i].dim() == 2:  # If the mask is 2D, add batch and channel dimensions
-                masks[i] = masks[i].unsqueeze(0).unsqueeze(0)
-            elif masks[i].dim() == 3:  # If the mask is 3D, add the batch dimension
-                masks[i] = masks[i].unsqueeze(0)
-            mask = masks[i].view(-1, masks[i].shape[-1])
+        if mask is not None:
+            if mask.dim() == 2:
+                mask = mask.unsqueeze(0).unsqueeze(0)
+            elif mask.dim() == 3:
+                mask = mask.unsqueeze(0)
+            mask = mask.view(-1, mask.shape[-1])
             data.mask = mask
-
         data_list.append(data)
-
     return data_list
 
-def create_grid_edge_index(height, width):
-    row, col = torch.meshgrid(torch.arange(height), torch.arange(width))
-    row, col = row.flatten(), col.flatten()
-
-    # Create horizontal edges
-    right = torch.stack([row[:-1], row[1:]], dim=0)
-    bottom = torch.stack([col[:-1], col[1:]], dim=0)
-
-    # Create vertical edges
-    down = torch.stack([row[:-width], row[width:]], dim=0)
-    bottom = torch.stack([col[:-width], col[width:]], dim=0)
-
-    # Combine horizontal and vertical edges
-    edge_index = torch.cat([right, down], dim=1)
-
-    return edge_index
-
+# Efficient data loading
+def parallel_data_creation(dataset):
+    images = []
+    masks = []
+    labels = []
+    for img, mask, label in tqdm(dataset, desc="Creating data"):
+        if img is not None:
+            images.append(img)
+            masks.append(mask)
+            labels.append(label)
+    return create_graph_data(images, masks, labels)
 
 # Define transforms
 transform = transforms.Compose([
@@ -413,9 +405,14 @@ transform = transforms.Compose([
     transforms.Normalize(mean=[0.5], std=[0.5]),  # Normalization for grayscale images
 ])
 
+# Use a smaller subset of the dataset for initial experiments
+sample_size = 500  # Adjust this number based on your needs
+mam_train_data_sample = mam_train_data.sample(n=sample_size, random_state=42)
+mam_test_data_sample = mam_test_data.sample(n=sample_size, random_state=42)
+
 # Initialize datasets and dataloaders
-train_dataset = BreastCancerDataset(dataframe=mam_train_data, transform=transform)
-test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=transform)
+train_dataset = BreastCancerDataset(dataframe=mam_train_data_sample, transform=transform)
+test_dataset = BreastCancerDataset(dataframe=mam_test_data_sample, transform=transform)
 
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
@@ -445,7 +442,6 @@ train_graph_loader = GeometricDataLoader(train_graph_data, batch_size=32, shuffl
 test_graph_loader = GeometricDataLoader(test_graph_data, batch_size=32, shuffle=False)
 
 # Model setup
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = HybridModel(num_classes=2).to(device)
 
 criterion = nn.CrossEntropyLoss()
@@ -488,39 +484,3 @@ for epoch in range(num_epochs):
     if accuracy > best_accuracy:
         best_accuracy = accuracy
         torch.save(model.state_dict(), 'best_model.pth')
-
-
-"""print("Training...")
-for epoch in range(num_epochs):
-    model.train()
-    running_loss = 0.0
-    for i, batch in enumerate(tqdm(train_graph_loader, desc=f'Epoch {epoch + 1}/{num_epochs}')):
-        batch = batch.to(device)
-        optimizer.zero_grad()
-        outputs = model(batch.x, batch.edge_index, batch.batch)
-        loss = criterion(outputs, batch.y)
-        loss.backward()
-        optimizer.step()
-        running_loss += loss.item()
-
-    model.eval()
-    with torch.no_grad():
-        correct = 0
-        total = 0
-        val_loss = 0.0
-        for batch in test_graph_loader:
-            batch = batch.to(device)
-            outputs = model(batch.x, batch.edge_index, batch.batch)
-            loss = criterion(outputs, batch.y)
-            val_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            total += batch.y.size(0)
-            correct += (predicted == batch.y).sum().item()
-
-        accuracy = 100 * correct / total
-        print(f'Epoch [{epoch + 1}/{num_epochs}], '
-              f'Training Loss: {running_loss / len(train_graph_loader):.4f}, ',
-              f'Validation Loss: {val_loss / len(test_graph_loader):.4f}, ',
-              f'Accuracy: {accuracy:.2f}%')
-
-print('Finished Training')"""
