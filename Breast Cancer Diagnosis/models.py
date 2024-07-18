@@ -30,10 +30,12 @@ class ViTClassifier(nn.Module):
 class GNNModel(torch.nn.Module):
     def __init__(self, num_node_features, num_classes):
         super(GNNModel, self).__init__()
-        self.conv1 = GCNConv(num_node_features, 16)
-        self.conv2 = GCNConv(16, 32)
-        self.conv3 = GCNConv(32, 64)
-        self.fc = nn.Linear(64, num_classes)
+        self.conv1 = GCNConv(num_node_features, 32)
+        self.conv2 = GCNConv(32, 64)
+        self.conv3 = GCNConv(64, 128)
+        self.fc1 = nn.Linear(128, 64)
+        self.fc2 = nn.Linear(64, num_classes)
+        self.dropout = nn.Dropout(0.5)
 
     def forward(self, data):
         x, edge_index, batch = data.x, data.edge_index, data.batch
@@ -46,17 +48,17 @@ class GNNModel(torch.nn.Module):
 
         x = F.relu(self.conv1(x, edge_index))
         print(f"After conv1 shape: {x.shape}")
-
+        x = self.dropout(x)
         x = F.relu(self.conv2(x, edge_index))
         print(f"After conv2 shape: {x.shape}")
-
+        x = self.dropout(x)
         x = F.relu(self.conv3(x, edge_index))
         print(f"After conv3 shape: {x.shape}")
-
         x = global_mean_pool(x, batch)
         print(f"After global_mean_pool shape: {x.shape}")
-
-        x = self.fc(x)
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
         print(f"Final output shape: {x.shape}")
 
         return x

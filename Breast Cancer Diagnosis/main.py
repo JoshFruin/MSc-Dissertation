@@ -497,7 +497,9 @@ num_node_features = 3  # Grayscale image, so single feature per node - grayscale
 num_classes = 2
 model = GNNModel(num_node_features=num_node_features, num_classes=num_classes).to(device)
 
-criterion = nn.CrossEntropyLoss()
+class_weights = torch.tensor([1.0, (231/148)]).to(device)
+criterion = nn.CrossEntropyLoss(weight=class_weights)
+
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
