@@ -499,7 +499,7 @@ model = GNNModel(num_node_features=num_node_features, num_classes=num_classes).t
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
 num_epochs = 5
 best_accuracy = 0.0
@@ -525,7 +525,7 @@ for epoch in range(num_epochs):
         running_loss += loss.item()
 
     print(f'Epoch {epoch + 1}/{num_epochs}, Loss: {running_loss / len(train_loader)}')
-    scheduler.step()
+    scheduler.step(loss)
 # Evaluation on test set
 model.eval()
 y_true = []
