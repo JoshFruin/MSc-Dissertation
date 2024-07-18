@@ -396,7 +396,6 @@ class BreastCancerGraphDataset(Dataset):
         data = Data(x=x, edge_index=edge_index)
         return data
 
-
 class BreastCancerGraphDataset(Dataset):
     def __init__(self, dataframe, transform=None, num_nodes=100):
         self.data = dataframe
@@ -441,8 +440,12 @@ class BreastCancerGraphDataset(Dataset):
 # Define transforms
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomVerticalFlip(),
+    transforms.RandomRotation(10),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.5], std=[0.5]),  # Normalization for grayscale images
+    transforms.Normalize(mean=[0.5], std=[0.5]),
 ])
 
 # Use a smaller subset of the dataset for initial experiments
@@ -474,12 +477,14 @@ num_nodes = 100
 train_dataset = BreastCancerGraphDataset(dataframe=mam_train_data, transform=transform, num_nodes=num_nodes)
 test_dataset = BreastCancerGraphDataset(dataframe=mam_test_data, transform=transform, num_nodes=num_nodes)
 
+batch_size = 16
+
 import time
 start_time = time.time()
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 end_time = time.time()
 print(f"Time taken: {end_time - start_time} seconds")
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 
 # Call dataloader_visualisations function
@@ -500,7 +505,7 @@ model = GNNModel(num_node_features=num_node_features, num_classes=num_classes).t
 class_weights = torch.tensor([1.0, (231/148)]).to(device)
 criterion = nn.CrossEntropyLoss(weight=class_weights)
 
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+optimizer = optim.Adam(model.parameters(), lr=0.0001)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
 num_epochs = 5

@@ -26,43 +26,70 @@ class ViTClassifier(nn.Module):
     def forward(self, x):
         return self.vit(x)
 
-
 class GNNModel(torch.nn.Module):
-    def __init__(self, num_node_features, num_classes):
+    def __init__(self, num_node_features, num_classes, dropout_rate=0.5):
         super(GNNModel, self).__init__()
-        self.conv1 = GCNConv(num_node_features, 32)
-        self.conv2 = GCNConv(32, 64)
+        self.conv1 = GCNConv(num_node_features, 64)
+        self.conv2 = GCNConv(64, 64)
         self.conv3 = GCNConv(64, 128)
+        self.conv4 = GCNConv(128, 128)
         self.fc1 = nn.Linear(128, 64)
         self.fc2 = nn.Linear(64, num_classes)
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, data):
         x, edge_index, batch = data.x, data.edge_index, data.batch
         print(f"Input x shape: {x.shape}")
         print(f"Edge index shape: {edge_index.shape}")
         print(f"Batch shape: {batch.shape}")
-
-        x = x.view(-1, 3)
-        print(f"Reshaped x shape: {x.shape}")
-
         x = F.relu(self.conv1(x, edge_index))
         print(f"After conv1 shape: {x.shape}")
         x = self.dropout(x)
-        x = F.relu(self.conv2(x, edge_index))
-        print(f"After conv2 shape: {x.shape}")
+        x = x + F.relu(self.conv2(x, edge_index))  # Residual connection
         x = self.dropout(x)
+        print(f"After conv2 shape: {x.shape}")
         x = F.relu(self.conv3(x, edge_index))
+        x = self.dropout(x)
         print(f"After conv3 shape: {x.shape}")
+        x = x + F.relu(self.conv4(x, edge_index))  # Residual connection
+        x = self.dropout(x)
+        print(f"After conv4 shape: {x.shape}")
+
         x = global_mean_pool(x, batch)
-        print(f"After global_mean_pool shape: {x.shape}")
         x = F.relu(self.fc1(x))
         x = self.dropout(x)
         x = self.fc2(x)
-        print(f"Final output shape: {x.shape}")
+        print(f"Final shape: {x.shape}")
 
         return x
 
+from torch_geometric.nn import GATConv, global_add_pool
+
+"""class GNNModel(torch.nn.Module):
+    def __init__(self, num_node_features, num_classes, dropout_rate=0.5):
+        super(GNNModel, self).__init__()
+        self.conv1 = GATConv(num_node_features, 64, heads=4, dropout=dropout_rate)
+        self.conv2 = GATConv(64*4, 64, heads=4, dropout=dropout_rate)
+        self.conv3 = GATConv(64*4, 64, heads=6, dropout=dropout_rate)
+        self.fc1 = nn.Linear(64*6, 64)
+        self.fc2 = nn.Linear(64, num_classes)
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+
+        x = F.elu(self.conv1(x, edge_index))
+        x = self.dropout(x)
+        x = F.elu(self.conv2(x, edge_index))
+        x = self.dropout(x)
+        x = F.elu(self.conv3(x, edge_index))
+
+        x = global_add_pool(x, batch)
+        x = F.elu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+
+        return x"""
 
 class HybridModel(nn.Module):
     def __init__(self, num_classes):
