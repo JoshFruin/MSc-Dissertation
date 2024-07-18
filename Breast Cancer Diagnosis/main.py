@@ -8,15 +8,15 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
 from torchvision import transforms
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset #, DataLoader
 from PIL import Image
 from tqdm import tqdm  # Import tqdm for progress bars
+from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score, matthews_corrcoef
 
 # Imports within the project
 from data_visualisations import visualise_data, dataloader_visualisations
-from models import SimpleCNN, ResNetClassifier, UNet, VGGClassifier, HybridModel
+from models import SimpleCNN, ResNetClassifier, UNet, VGGClassifier, HybridModel, GNNModel
 
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
@@ -291,11 +291,11 @@ mam_train_data.reset_index(drop=True, inplace=True)
 mam_test_data.reset_index(drop=True, inplace=True)
 
 # Data Visualization
-visualisation_choice = int(input("Do you want to visualise the data? (1 for yes, 0 for no): "))
+"""visualisation_choice = int(input("Do you want to visualise the data? (1 for yes, 0 for no): "))
 if visualisation_choice == 1:
     visualise_data(mass_train, calc_train)
 else:
-    print("Data visualisation skipped.")
+    print("Data visualisation skipped.")"""
 
 # Update BreastCancerDataset constructor to print unique values in 'pathology' column before mapping
 class BreastCancerDataset(Dataset):
@@ -356,48 +356,88 @@ class BreastCancerDataset(Dataset):
 
         return image.to(device), mask.to(device) if mask is not None else mask, label.to(device)
 
+import torch_geometric
+from torch_geometric.data import Data, Dataset
+from torch_geometric.transforms import ToUndirected
+class BreastCancerGraphDataset(Dataset):
+    def __init__(self, dataframe, transform=None):
+        self.data = dataframe
+        self.transform = transform
 
-# Additional imports for GNN
-from torch_geometric.data import Data, DataLoader as GeometricDataLoader
+        self.labels = torch.tensor(self.data['pathology'].values, dtype=torch.long)
 
-from torch_geometric.data import Data
-from torch_geometric.utils import grid
+    def __len__(self):
+        return len(self.data)
 
-# Creating graph data
-def create_graph_data(images, masks, labels):
-    data_list = []
-    for i in range(len(images)):
-        image = images[i]
-        mask = masks[i] if masks[i] is not None else None
-        if image.dim() == 2:
-            image = image.unsqueeze(0).unsqueeze(0)
-        elif image.dim() == 3:
-            image = image.unsqueeze(0)
-        x = image.view(-1, image.shape[-1])
-        edge_index = grid(image.shape[-2], image.shape[-1])
-        data = Data(x=x, edge_index=edge_index, y=labels[i])
-        if mask is not None:
-            if mask.dim() == 2:
-                mask = mask.unsqueeze(0).unsqueeze(0)
-            elif mask.dim() == 3:
-                mask = mask.unsqueeze(0)
-            mask = mask.view(-1, mask.shape[-1])
-            data.mask = mask
-        data_list.append(data)
-    return data_list
+    def __getitem__(self, idx):
+        img_name = self.data.iloc[idx, 11]  # Full mammogram image
+        image = Image.open(img_name).convert("L")  # Ensure image is grayscale
 
-# Efficient data loading
-def parallel_data_creation(dataset):
-    images = []
-    masks = []
-    labels = []
-    for img, mask, label in tqdm(dataset, desc="Creating data"):
-        if img is not None:
-            images.append(img)
-            masks.append(mask)
-            labels.append(label)
-    return create_graph_data(images, masks, labels)
+        if self.transform is not None:
+            image = self.transform(image)
 
+        # Convert image to graph
+        data = self.image_to_graph(image)
+        data.y = self.labels[idx]
+
+        return data
+
+    def image_to_graph(self, image):
+        # Assuming image is a 2D tensor after transform
+        image = image.squeeze(0)  # Remove the channel dimension
+
+        # Create a grid graph from the image pixels
+        edge_index = torch_geometric.utils.grid(
+            height=image.size(1),
+            width=image.size(0)
+        )
+        x = image.flatten().unsqueeze(1)  # Node features
+
+        data = Data(x=x, edge_index=edge_index)
+        return data
+
+
+class BreastCancerGraphDataset(Dataset):
+    def __init__(self, dataframe, transform=None, num_nodes=100):
+        self.data = dataframe
+        self.transform = transform
+        self.num_nodes = num_nodes
+        self.labels = torch.tensor(
+            self.data['pathology'].map({'MALIGNANT': 1, 'BENIGN': 0, 'BENIGN_WITHOUT_CALLBACK': 0}).fillna(0).astype(
+                int).values, dtype=torch.long)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        img_name = self.data.iloc[idx, 11]  # Full mammogram image
+
+        if pd.isnull(img_name):
+            return None
+
+        image = Image.open(img_name).convert("RGB")
+
+        if self.transform is not None:
+            image = self.transform(image)
+
+        # Convert image to graph
+        node_features = image.view(-1, 3)[:self.num_nodes]
+
+        # If we have fewer pixels than num_nodes, pad with zeros
+        if node_features.size(0) < self.num_nodes:
+            padding = torch.zeros(self.num_nodes - node_features.size(0), 3)
+            node_features = torch.cat([node_features, padding], dim=0)
+
+        edge_index = self._create_edge_index(self.num_nodes)
+
+        label = self.labels[idx]
+
+        return Data(x=node_features, edge_index=edge_index, y=label)
+
+    def _create_edge_index(self, num_nodes):
+        # Create a simple fully connected graph
+        edge_index = torch.combinations(torch.arange(num_nodes), r=2).t().contiguous()
+        return edge_index  # No need to concatenate with flipped version
 # Define transforms
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
@@ -406,50 +446,60 @@ transform = transforms.Compose([
 ])
 
 # Use a smaller subset of the dataset for initial experiments
-sample_size = 30  # Can go up to 300 from testing but not 400
+sample_size = 150  # Can go up to 300 from testing but not 400
 mam_train_data_sample = mam_train_data.sample(n=sample_size, random_state=42)
 mam_test_data_sample = mam_test_data.sample(n=sample_size, random_state=42)
 
-# Initialize datasets and dataloaders
-train_dataset = BreastCancerDataset(dataframe=mam_train_data, transform=transform)
-test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=transform)
+# Ensure the 'pathology' column in the sample datasets contains only integers
+mam_train_data_sample['pathology'] = mam_train_data_sample['pathology'].map(label_mapping).astype(int)
+mam_test_data_sample['pathology'] = mam_test_data_sample['pathology'].map(label_mapping).astype(int)
 
+# Check for any potential non-numeric entries
+print(mam_train_data_sample['pathology'].unique())
+print(mam_test_data_sample['pathology'].unique())
+
+# Initialize datasets and dataloaders
+"""train_dataset = BreastCancerDataset(dataframe=mam_train_data, transform=transform)
+test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=transform)"""
+# Testing datasets
 """train_dataset = BreastCancerDataset(dataframe=mam_train_data_sample, transform=transform)
-test_dataset = BreastCancerDataset(dataframe=mam_test_data_sample, transform=transform)"""
+test_dataset = BreastCancerDataset(dataframe=mam_test_data_sample, transform=transform)
 
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)"""
+
+from torch_geometric.data import DataLoader
+num_nodes = 100
+# Initialize datasets and dataloaders
+train_dataset = BreastCancerGraphDataset(dataframe=mam_train_data, transform=transform, num_nodes=num_nodes)
+test_dataset = BreastCancerGraphDataset(dataframe=mam_test_data, transform=transform, num_nodes=num_nodes)
+
+import time
+start_time = time.time()
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+end_time = time.time()
+print(f"Time taken: {end_time - start_time} seconds")
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
+
 # Call dataloader_visualisations function
-visualisation_choice_2 = int(input("Do you want to visualise the dataloader? (1 for yes, 0 for no): "))
+"""visualisation_choice_2 = int(input("Do you want to visualise the dataloader? (1 for yes, 0 for no): "))
 if visualisation_choice_2 == 1:
     dataloader_visualisations(train_dataset, test_dataset, train_loader, test_loader)
 else:
-    print("Dataloader visualisation skipped.")
+    print("Dataloader visualisation skipped.")"""
 
 for i in range(10):
     print(train_dataset[i])
 
-# Creating graph data
-import time
-
-start_time = time.time()
-train_graph_data = create_graph_data([data[0] for data in train_dataset], [data[1] for data in train_dataset], train_dataset.labels)
-end_time = time.time()
-print(f"Time taken: {end_time - start_time} seconds")
-
-test_graph_data = create_graph_data([data[0] for data in test_dataset], [data[1] for data in test_dataset],
-                                    test_dataset.labels)
-
-train_graph_loader = GeometricDataLoader(train_graph_data, batch_size=32, shuffle=True)
-test_graph_loader = GeometricDataLoader(test_graph_data, batch_size=32, shuffle=False)
-
 # Model setup
-model = HybridModel(num_classes=2).to(device)
+num_node_features = 3  # Grayscale image, so single feature per node - grayscale tho
+num_classes = 2
+model = GNNModel(num_node_features=num_node_features, num_classes=num_classes).to(device)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)  # StepLR scheduler
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
 
 num_epochs = 5
 best_accuracy = 0.0
@@ -458,22 +508,24 @@ print("Training...")
 for epoch in range(num_epochs):
     model.train()
     running_loss = 0.0
-    for i, batch in enumerate(tqdm(train_graph_loader, desc=f'Epoch {epoch + 1}/{num_epochs}')):
+    for batch in tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs}'):
+        batch = batch.to(device)
+
+        # Debug prints
+        print(f"Batch size: {batch.num_graphs}")
+        print(f"x shape: {batch.x.shape}")
+        print(f"edge_index shape: {batch.edge_index.shape}")
+        print(f"y shape: {batch.y.shape}")
+
         optimizer.zero_grad()
-        images = batch.x.view(batch.batch.max().item() + 1, -1, 224, 224).to(device)  # Ensure the input is 4D
-        labels = batch.y.to(device)
-        outputs = model(images)
-        loss = criterion(outputs, labels)
+        outputs = model(batch)
+        loss = criterion(outputs, batch.y)
         loss.backward()
         optimizer.step()
         running_loss += loss.item()
 
-    print(f'Epoch {epoch+1}/{num_epochs}, Loss: {running_loss/len(train_graph_loader)}')
-    # Step the scheduler after each epoch (for StepLR)
+    print(f'Epoch {epoch + 1}/{num_epochs}, Loss: {running_loss / len(train_loader)}')
     scheduler.step()
-
-from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score, matthews_corrcoef
-
 # Evaluation on test set
 model.eval()
 y_true = []
@@ -481,14 +533,14 @@ y_pred = []
 y_scores = []
 
 with torch.no_grad():
-    for images, masks, labels in test_loader:
-        images, masks, labels = images.to(device), masks.to(device), labels.to(device)
-        outputs = model(images, masks)
+    for batch in test_loader:
+        batch = batch.to(device)
+        outputs = model(batch)
         _, predicted = torch.max(outputs.data, 1)
 
-        y_true.extend(labels.cpu().numpy())
+        y_true.extend(batch.y.cpu().numpy())
         y_pred.extend(predicted.cpu().numpy())
-        y_scores.extend(outputs[:, 1].cpu().numpy())  # Assuming the second column is the score for class 1 (malignant)
+        y_scores.extend(outputs[:, 1].cpu().numpy())
 
 # Convert lists to numpy arrays
 y_true = np.array(y_true)

@@ -26,17 +26,29 @@ class ViTClassifier(nn.Module):
     def forward(self, x):
         return self.vit(x)
 
-class GCN(nn.Module):
-    def __init__(self, num_node_features, num_classes):
-        super(GCN, self).__init__()
-        self.conv1 = GCNConv(num_node_features, 16)
-        self.conv2 = GCNConv(16, num_classes)
 
-    def forward(self, x, edge_index, batch):
-        x = self.conv1(x, edge_index)
-        x = F.relu(x)
-        x = self.conv2(x, edge_index)
-        return global_mean_pool(x, batch)  # Global pooling
+class GNNModel(torch.nn.Module):
+    def __init__(self, num_node_features, num_classes):
+        super(GNNModel, self).__init__()
+        self.conv1 = GCNConv(num_node_features, 16)
+        self.conv2 = GCNConv(16, 32)
+        self.conv3 = GCNConv(32, 64)
+        self.fc = nn.Linear(64, num_classes)
+
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+
+        # Reshape x to [num_nodes, num_features]
+        x = x.view(-1, 3)
+
+        x = F.relu(self.conv1(x, edge_index))
+        x = F.relu(self.conv2(x, edge_index))
+        x = F.relu(self.conv3(x, edge_index))
+
+        x = global_mean_pool(x, batch)  # [num_graphs, hidden_channels]
+
+        x = self.fc(x)
+        return x
 
 class HybridModel(nn.Module):
     def __init__(self, num_classes):
