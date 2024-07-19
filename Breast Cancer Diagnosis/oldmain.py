@@ -287,11 +287,11 @@ mam_train_data.reset_index(drop=True, inplace=True)
 mam_test_data.reset_index(drop=True, inplace=True)
 
 # Data Visualization
-visualisation_choice = int(input("Do you want to visualize the data? (1 for yes, 0 for no): "))
+"""visualisation_choice = int(input("Do you want to visualize the data? (1 for yes, 0 for no): "))
 if visualisation_choice == 1:
     visualise_data(mass_train, calc_train)
 else:
-    print("Data visualisation skipped.")
+    print("Data visualisation skipped.")"""
 
 # Update BreastCancerDataset constructor to print unique values in 'pathology' column before mapping
 class BreastCancerDataset(Dataset):
@@ -364,11 +364,11 @@ train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
 # Call dataloader_visualisations function
-visualisation_choice_2 = int(input("Do you want to visualise the dataloader? (1 for yes, 0 for no): "))
+"""visualisation_choice_2 = int(input("Do you want to visualise the dataloader? (1 for yes, 0 for no): "))
 if visualisation_choice_2 == 1:
     dataloader_visualisations(train_dataset, test_dataset, train_loader, test_loader)
 else:
-    print("Dataloader visualisation skipped.")
+    print("Dataloader visualisation skipped.")"""
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = SimpleCNN(num_classes=2).to(device)
@@ -381,7 +381,7 @@ model = SimpleCNN(num_classes=2).to(device)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-num_epochs = 1
+num_epochs = 5
 
 print("Training...")
 for epoch in range(num_epochs):

@@ -1,111 +1,71 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torchvision.models as models
-from torchvision.models import vit_b_16
-import torch_geometric.nn as pyg_nn
-from transformers import ViTModel
-import dgl
-import dgl.nn.pytorch as dglnn
 from torch_geometric.nn import GCNConv, global_mean_pool
-from torch_geometric.data import Data
+from torch_geometric.data import Data, Batch
+import torch.nn.functional as F
+import traceback
 
-class ViTClassifier(nn.Module):
-    def __init__(self, num_classes=2, in_channels=1):  # Added in_channels parameter
-        super(ViTClassifier, self).__init__()
+import torch
+import torch.nn as nn
+import torchvision.models as models
+from torch_geometric.nn import GCNConv, global_mean_pool
+from torch_geometric.data import Data, Batch
+
+
+class ViTGNNHybrid(nn.Module):
+    def __init__(self, num_classes=2):
+        super(ViTGNNHybrid, self).__init__()
+
+        # ViT Feature Extractor
         self.vit = models.vit_b_16(pretrained=True)
-        # Modify first layer for single-channel input
-        self.vit.conv_proj = nn.Conv2d(in_channels, self.vit.hidden_dim, kernel_size=(16, 16), stride=(16, 16))
-        # Update classifier head
-        in_features = self.vit.heads[0].in_features
-        self.vit.heads = nn.Sequential(
-            nn.Dropout(0.2),  # Add dropout for regularization
-            nn.Linear(in_features, num_classes)
-        )
+        self.vit.heads = nn.Identity()  # Remove the classification head
 
-    def forward(self, x):
-        return self.vit(x)
+        # Adapt ViT for grayscale input
+        self.vit.conv_proj = nn.Conv2d(1, 768, kernel_size=(16, 16), stride=(16, 16))
 
-class GNNModel(torch.nn.Module):
-    def __init__(self, num_node_features, num_classes, dropout_rate=0.5):
-        super(GNNModel, self).__init__()
-        self.conv1 = GCNConv(num_node_features, 64)
-        self.conv2 = GCNConv(64, 64)
-        self.conv3 = GCNConv(64, 128)
-        self.conv4 = GCNConv(128, 128)
-        self.fc1 = nn.Linear(128, 64)
-        self.fc2 = nn.Linear(64, num_classes)
-        self.dropout = nn.Dropout(dropout_rate)
+        # Graph Construction Layer
+        self.graph_constructor = nn.Linear(768, 128)
 
-    def forward(self, data):
-        x, edge_index, batch = data.x, data.edge_index, data.batch
-        print(f"Input x shape: {x.shape}")
-        print(f"Edge index shape: {edge_index.shape}")
-        print(f"Batch shape: {batch.shape}")
-        x = F.relu(self.conv1(x, edge_index))
-        print(f"After conv1 shape: {x.shape}")
-        x = self.dropout(x)
-        x = x + F.relu(self.conv2(x, edge_index))  # Residual connection
-        x = self.dropout(x)
-        print(f"After conv2 shape: {x.shape}")
-        x = F.relu(self.conv3(x, edge_index))
-        x = self.dropout(x)
-        print(f"After conv3 shape: {x.shape}")
-        x = x + F.relu(self.conv4(x, edge_index))  # Residual connection
-        x = self.dropout(x)
-        print(f"After conv4 shape: {x.shape}")
+        # GNN Layers
+        self.conv1 = GCNConv(128, 64)
+        self.conv2 = GCNConv(64, 32)
 
-        x = global_mean_pool(x, batch)
-        x = F.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
-        print(f"Final shape: {x.shape}")
+        # Final classification layer
+        self.classifier = nn.Linear(32, num_classes)
+
+    def forward(self, x, mask):
+        batch_size = x.size(0)
+
+        # ViT Feature Extraction
+        x = self.vit(x)  # Shape: (batch_size, 768)
+
+        # Convert mask to float and use it to focus on ROI
+        mask_float = mask.float()
+        mask_pooled = nn.functional.adaptive_avg_pool2d(mask_float, (1, 1)).squeeze()
+        x = x * mask_pooled.unsqueeze(1)
+
+        # Graph Construction
+        node_features = self.graph_constructor(x)  # Shape: (batch_size, 128)
+
+        # Create a batch of fully connected graphs
+        edge_index = torch.stack([torch.arange(batch_size).repeat_interleave(batch_size),
+                                  torch.arange(batch_size).repeat(batch_size)])
+
+        # Create a PyG Data object
+        data = Data(x=node_features, edge_index=edge_index)
+
+        # GNN Layers
+        x = torch.relu(self.conv1(data.x, data.edge_index))
+        x = torch.relu(self.conv2(x, data.edge_index))
+
+        # Global Pooling
+        x = global_mean_pool(x, torch.arange(batch_size))
+
+        # Classification
+        x = self.classifier(x)
 
         return x
-
-from torch_geometric.nn import GATConv, global_add_pool
-
-"""class GNNModel(torch.nn.Module):
-    def __init__(self, num_node_features, num_classes, dropout_rate=0.5):
-        super(GNNModel, self).__init__()
-        self.conv1 = GATConv(num_node_features, 64, heads=4, dropout=dropout_rate)
-        self.conv2 = GATConv(64*4, 64, heads=4, dropout=dropout_rate)
-        self.conv3 = GATConv(64*4, 64, heads=6, dropout=dropout_rate)
-        self.fc1 = nn.Linear(64*6, 64)
-        self.fc2 = nn.Linear(64, num_classes)
-        self.dropout = nn.Dropout(dropout_rate)
-
-    def forward(self, data):
-        x, edge_index, batch = data.x, data.edge_index, data.batch
-
-        x = F.elu(self.conv1(x, edge_index))
-        x = self.dropout(x)
-        x = F.elu(self.conv2(x, edge_index))
-        x = self.dropout(x)
-        x = F.elu(self.conv3(x, edge_index))
-
-        x = global_add_pool(x, batch)
-        x = F.elu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
-
-        return x"""
-
-class HybridModel(nn.Module):
-    def __init__(self, num_classes):
-        super(HybridModel, self).__init__()
-        self.vit = models.vit_b_16(pretrained=True)  # Replace with your ViT model
-        self.fc = nn.Linear(1000, num_classes)  # Assuming ViT outputs 1000 features
-
-    def forward(self, x, edge_index=None, batch=None):
-        if x.dim() == 2:  # If input is 2D, reshape it to 4D
-            n = int(torch.sqrt(torch.tensor(x.shape[0])))
-            x = x.view(1, 1, n, n)  # Assuming input is square and grayscale
-        elif x.dim() == 3:  # If input is 3D, reshape it to 4D
-            x = x.unsqueeze(0)
-        vit_out = self.vit(x)
-        out = self.fc(vit_out)
-        return out
 
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes=2):
@@ -125,7 +85,6 @@ class SimpleCNN(nn.Module):
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
-
 
 class UNet(nn.Module):
     def __init__(self, in_channels=1, out_channels=1):
