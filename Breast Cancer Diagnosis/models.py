@@ -19,48 +19,42 @@ class ViTGNNHybrid(nn.Module):
 
         # ViT Feature Extractor
         self.vit = models.vit_b_16(pretrained=True)
-        self.vit.heads = nn.Identity()  # Remove the classification head
+        self.vit.heads = nn.Sequential(
+            nn.Linear(768, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Linear(256, 128)
+        )
 
         # Adapt ViT for grayscale input
         self.vit.conv_proj = nn.Conv2d(1, 768, kernel_size=(16, 16), stride=(16, 16))
 
-        # Graph Construction Layer
-        self.graph_constructor = nn.Linear(768, 128)
-
         # GNN Layers
         self.conv1 = GCNConv(128, 64)
+        self.bn1 = nn.BatchNorm1d(64)
         self.conv2 = GCNConv(64, 32)
+        self.bn2 = nn.BatchNorm1d(32)
 
         # Final classification layer
         self.classifier = nn.Linear(32, num_classes)
 
     def forward(self, x, mask):
+        device = x.device
         batch_size = x.size(0)
 
         # ViT Feature Extraction
-        x = self.vit(x)  # Shape: (batch_size, 768)
-
-        # Convert mask to float and use it to focus on ROI
-        mask_float = mask.float()
-        mask_pooled = nn.functional.adaptive_avg_pool2d(mask_float, (1, 1)).squeeze()
-        x = x * mask_pooled.unsqueeze(1)
-
-        # Graph Construction
-        node_features = self.graph_constructor(x)  # Shape: (batch_size, 128)
+        x = self.vit(x)  # Shape: (batch_size, 128)
 
         # Create a batch of fully connected graphs
         edge_index = torch.stack([torch.arange(batch_size).repeat_interleave(batch_size),
-                                  torch.arange(batch_size).repeat(batch_size)])
-
-        # Create a PyG Data object
-        data = Data(x=node_features, edge_index=edge_index)
+                                  torch.arange(batch_size).repeat(batch_size)]).to(device)
 
         # GNN Layers
-        x = torch.relu(self.conv1(data.x, data.edge_index))
-        x = torch.relu(self.conv2(x, data.edge_index))
+        x = F.relu(self.bn1(self.conv1(x, edge_index)))
+        x = F.relu(self.bn2(self.conv2(x, edge_index)))
 
         # Global Pooling
-        x = global_mean_pool(x, torch.arange(batch_size))
+        x = global_mean_pool(x, torch.arange(batch_size).to(device))
 
         # Classification
         x = self.classifier(x)

@@ -24,10 +24,7 @@ warnings.filterwarnings("ignore")
 
 print(torch.__version__)
 
-# Setup device agnostic code
 print(torch.cuda.is_available())
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(device)
 
 """
 For the mammograms we're using the CBIS-DDSM dataset from Kaggle: https://www.kaggle.com/datasets/awsaf49/cbis-ddsm-breast-cancer-image-dataset/data
@@ -354,12 +351,21 @@ class BreastCancerDataset(Dataset):
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.5], std=[0.5]),  # Normalization for grayscale images
+    transforms.Normalize(mean=[0.485], std=[0.229]),  # Use ImageNet stats for grayscale
 ])
 
+train_transform = transforms.Compose([
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485], std=[0.229]), # Use ImageNet stats for grayscale
+])
 # Initialize datasets and dataloaders
-train_dataset = BreastCancerDataset(dataframe=mam_train_data, transform=transform)
+train_dataset = BreastCancerDataset(dataframe=mam_train_data, transform=train_transform)
 test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=transform)
+print("Train set class distribution:", np.unique(train_dataset.labels, return_counts=True))
+print("Test set class distribution:", np.unique(test_dataset.labels, return_counts=True))
 # Modify the DataLoader to handle the graph data
 def collate_fn(batch):
     images, masks, labels = zip(*batch)
@@ -367,7 +373,16 @@ def collate_fn(batch):
     masks = torch.stack(masks)
     labels = torch.tensor(labels)
     return images, masks, labels
+from sklearn.model_selection import train_test_split
+# Use a portion of the training data for validation
+train_data, val_data = train_test_split(mam_train_data, test_size=0.2, random_state=42)
+
+train_dataset = BreastCancerDataset(dataframe=train_data, transform=train_transform)
+val_dataset = BreastCancerDataset(dataframe=val_data, transform=transform)
+test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=transform)
+
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, collate_fn=collate_fn)
+val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, collate_fn=collate_fn)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, collate_fn=collate_fn)
 
 
@@ -379,43 +394,116 @@ else:
     print("Dataloader visualisation skipped.")"""
 
 # Initialize the ViT-GNN hybrid model
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(device)
 model = ViTGNNHybrid(num_classes=2).to(device)
 
-criterion = nn.CrossEntropyLoss()
+from sklearn.utils.class_weight import compute_class_weight
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+# Fix class imbalance
+class_weights = compute_class_weight('balanced', classes=np.unique(train_dataset.labels.numpy()), y=train_dataset.labels.numpy())
+class_weights = torch.tensor(class_weights, dtype=torch.float).to(device)
+criterion = nn.CrossEntropyLoss(weight=class_weights)
+
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-num_epochs = 1
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True)
+num_epochs = 5
 
 print("Training...")
+best_val_loss = float('inf')
+patience = 5
+epochs_without_improvement = 0
+
 for epoch in range(num_epochs):
+    # Training loop
     model.train()
-    running_loss = 0.0
-    for i, (images, masks, labels) in enumerate(tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs}')):
+    train_loss = 0.0
+    train_preds, train_labels = [], []
+
+    for images, masks, labels in tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs} - Training'):
         images, masks, labels = images.to(device), masks.to(device), labels.to(device)
         optimizer.zero_grad()
         outputs = model(images, masks)
         loss = criterion(outputs, labels)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        running_loss += loss.item()
+        train_loss += loss.item()
 
+        _, preds = torch.max(outputs, 1)
+        train_preds.extend(preds.cpu().numpy())
+        train_labels.extend(labels.cpu().numpy())
+
+    train_loss /= len(train_loader)
+    train_acc = accuracy_score(train_labels, train_preds)
+    train_precision = precision_score(train_labels, train_preds, average='weighted')
+    train_recall = recall_score(train_labels, train_preds, average='weighted')
+    train_f1 = f1_score(train_labels, train_preds, average='weighted')
+
+    # Validation loop
     model.eval()
+    val_loss = 0.0
+    val_preds, val_labels = [], []
+
     with torch.no_grad():
-        correct = 0
-        total = 0
-        val_loss = 0.0
-        for images, masks, labels in test_loader:
+        for images, masks, labels in tqdm(val_loader, desc=f'Epoch {epoch + 1}/{num_epochs} - Validation'):
             images, masks, labels = images.to(device), masks.to(device), labels.to(device)
             outputs = model(images, masks)
             loss = criterion(outputs, labels)
             val_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
 
-        accuracy = 100 * correct / total
-        print(f'Epoch [{epoch + 1}/{num_epochs}], '
-              f'Training Loss: {running_loss / len(train_loader):.4f}, '
-              f'Validation Loss: {val_loss / len(test_loader):.4f}, '
-              f'Accuracy: {accuracy:.2f}%')
+            _, preds = torch.max(outputs, 1)
+            val_preds.extend(preds.cpu().numpy())
+            val_labels.extend(labels.cpu().numpy())
+
+    val_loss /= len(val_loader)
+    val_acc = accuracy_score(val_labels, val_preds)
+    val_precision = precision_score(val_labels, val_preds, average='weighted')
+    val_recall = recall_score(val_labels, val_preds, average='weighted')
+    val_f1 = f1_score(val_labels, val_preds, average='weighted')
+
+    # Print metrics
+    print(f'Epoch [{epoch + 1}/{num_epochs}]')
+    print(
+        f'Train - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, Prec: {train_precision:.4f}, Rec: {train_recall:.4f}, F1: {train_f1:.4f}')
+    print(
+        f'Val - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Prec: {val_precision:.4f}, Rec: {val_recall:.4f}, F1: {val_f1:.4f}')
+
+    # Learning rate scheduler step
+    scheduler.step(val_loss)
+
+    # Early stopping and model saving
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        epochs_without_improvement = 0
+        torch.save(model.state_dict(), 'best_model.pth')
+        print("Saved best model")
+    else:
+        epochs_without_improvement += 1
+        if epochs_without_improvement >= patience:
+            print("Early stopping")
+            break
 
 print('Finished Training')
+
+# Final evaluation on test set
+model.load_state_dict(torch.load('best_model.pth'))
+model.eval()
+test_preds, test_labels = [], []
+
+with torch.no_grad():
+    for images, masks, labels in tqdm(test_loader, desc='Testing'):
+        images, masks, labels = images.to(device), masks.to(device), labels.to(device)
+        outputs = model(images, masks)
+        _, preds = torch.max(outputs, 1)
+        test_preds.extend(preds.cpu().numpy())
+        test_labels.extend(labels.cpu().numpy())
+
+test_acc = accuracy_score(test_labels, test_preds)
+test_precision = precision_score(test_labels, test_preds, average='weighted')
+test_recall = recall_score(test_labels, test_preds, average='weighted')
+test_f1 = f1_score(test_labels, test_preds, average='weighted')
+
+print(f'Test Results - Acc: {test_acc:.4f}, Prec: {test_precision:.4f}, Rec: {test_recall:.4f}, F1: {test_f1:.4f}')
+print("Test Prediction distribution:", np.unique(test_preds, return_counts=True))
