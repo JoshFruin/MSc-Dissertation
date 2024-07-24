@@ -1,20 +1,12 @@
 import torch
 import torch.nn as nn
-import torchvision.models as models
-from torch_geometric.nn import GCNConv, global_mean_pool
-from torch_geometric.data import Data, Batch
 import torch.nn.functional as F
-import traceback
-
-import torch
-import torch.nn as nn
 import torchvision.models as models
-from torch_geometric.nn import GCNConv, global_mean_pool
+from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
 from torch_geometric.data import Data, Batch
-
 
 class ViTGNNHybrid(nn.Module):
-    def __init__(self, num_classes=2):
+    def __init__(self, num_classes=2, dropout_rate=0.3):
         super(ViTGNNHybrid, self).__init__()
 
         # ViT Feature Extractor
@@ -23,6 +15,7 @@ class ViTGNNHybrid(nn.Module):
             nn.Linear(768, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
+            nn.Dropout(dropout_rate),
             nn.Linear(256, 128)
         )
 
@@ -50,8 +43,8 @@ class ViTGNNHybrid(nn.Module):
                                   torch.arange(batch_size).repeat(batch_size)]).to(device)
 
         # GNN Layers
-        x = F.relu(self.bn1(self.conv1(x, edge_index)))
-        x = F.relu(self.bn2(self.conv2(x, edge_index)))
+        x = F.elu(self.bn1(self.conv1(x, edge_index)))
+        x = F.elu(self.bn2(self.conv2(x, edge_index)))
 
         # Global Pooling
         x = global_mean_pool(x, torch.arange(batch_size).to(device))
