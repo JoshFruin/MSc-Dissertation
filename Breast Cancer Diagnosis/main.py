@@ -1,3 +1,4 @@
+# Imports
 import pandas as pd
 import os
 import warnings
@@ -11,19 +12,34 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
-from PIL import Image
+import torchvision.transforms.functional as TF
+import torch.nn.functional as F
+from torch.optim.lr_scheduler import ReduceLROnPlateau, OneCycleLR
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm  # Import tqdm for progress bars
-
-# Imports within the project
 from data_visualisations import visualise_data, dataloader_visualisations
 from models import ViTGNNHybrid, SimpleCNN
 from torch_geometric.data import Data, Batch
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve
+from sklearn.utils.class_weight import compute_class_weight
+from sklearn.model_selection import GroupShuffleSplit
+import pandas as pd
+import os
+from PIL import Image
+import random
+import matplotlib.pyplot as plt
+from data_verification import (comprehensive_verify_data_linkage, verify_dataset_integrity,
+                               check_data_range, check_mask_values, check_data_consistency,
+                               check_label_consistency, visualize_augmented_samples,
+                               verify_data_loading, verify_label_distribution,
+                               verify_image_mask_correspondence, verify_batch, verify_labels)
+
 
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
-
+# Check torch version and if a GPU is available on the device
 print(torch.__version__)
-
 print(torch.cuda.is_available())
 
 """
@@ -288,138 +304,12 @@ mam_train_data = pd.concat([mass_train_data, calc_train_data], ignore_index=True
 # Combine mass_test_data and calc_test_data into mam_test_data
 mam_test_data = pd.concat([mass_test_data, calc_test_data], ignore_index=True)
 
-import pandas as pd
-import os
-from PIL import Image
-import random
-import matplotlib.pyplot as plt
-
-
-def comprehensive_verify_data_linkage(original_csv_path, processed_df, full_mammogram_dict, roi_mask_dict,
-                                      num_samples=5):
-    """
-    Verify that images, masks, and labels are correctly linked from original CSV through preprocessing.
-
-    Args:
-    original_csv_path (str): Path to the original CSV file.
-    processed_df (pd.DataFrame): The processed dataframe containing image paths and labels.
-    full_mammogram_dict (dict): Dictionary mapping keys to full mammogram image paths.
-    roi_mask_dict (dict): Dictionary mapping keys to ROI mask image paths.
-    num_samples (int): Number of random samples to verify.
-
-    Returns:
-    None. Prints verification results and displays images.
-    """
-    print(f"Verifying {num_samples} random samples...")
-
-    # Load original CSV
-    original_df = pd.read_csv(original_csv_path)
-
-    for i in range(num_samples):
-        # Randomly select a row from the processed dataframe
-        processed_row = processed_df.sample(n=1).iloc[0]
-
-        # Find the corresponding row in the original CSV
-        original_row = original_df[original_df['patient_id'] == processed_row['patient_id']].iloc[0]
-
-        # Extract relevant information
-        original_img_path = original_row['image file path']
-        original_mask_path = original_row['ROI mask file path']
-        processed_img_path = processed_row['image_file_path']
-        processed_mask_path = processed_row['ROI_mask_file_path']
-        label = processed_row['pathology']
-
-        # Verify file paths
-        img_key = processed_img_path.split("/")[-2]
-        mask_key = processed_mask_path.split("/")[-2]
-
-        if full_mammogram_dict[img_key] != processed_img_path:
-            print(f"Error: Mismatch in image file path for {img_key}")
-        if roi_mask_dict[mask_key] != processed_mask_path:
-            print(f"Error: Mismatch in mask file path for {mask_key}")
-
-        # Verify file existence
-        if not os.path.exists(processed_img_path):
-            print(f"Error: Image file does not exist: {processed_img_path}")
-            continue
-        if not os.path.exists(processed_mask_path):
-            print(f"Error: Mask file does not exist: {processed_mask_path}")
-            continue
-
-        # Load image and mask
-        try:
-            image = Image.open(processed_img_path).convert("L")
-            mask = Image.open(processed_mask_path).convert("L")
-        except Exception as e:
-            print(f"Error loading image or mask: {e}")
-            continue
-
-        # Display image, mask, and label
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
-
-        ax1.imshow(image, cmap='gray')
-        ax1.set_title("Image")
-        ax1.axis('off')
-
-        ax2.imshow(mask, cmap='gray')
-        ax2.set_title("Mask")
-        ax2.axis('off')
-
-        ax3.imshow(image)
-        ax3.imshow(mask, alpha=0.5, cmap='jet')
-        ax3.set_title("Image with Mask Overlay")
-        ax3.axis('off')
-
-        plt.suptitle(f"Sample {i + 1}: Label = {label}")
-        plt.tight_layout()
-        plt.show()
-
-        print(f"Sample {i + 1}:")
-        print(f"  Original Image Path: {original_img_path}")
-        print(f"  Processed Image Path: {processed_img_path}")
-        print(f"  Original Mask Path: {original_mask_path}")
-        print(f"  Processed Mask Path: {processed_mask_path}")
-        print(f"  Label: {label}")
-        print("\n")
-
-"""print("Verifying mass training data linkage...")
-comprehensive_verify_data_linkage(
-    mass_train_path,
-    mass_train,
-    full_mammogram_dict,
-    roi_mask_dict
-)
-
-print("Verifying calc training data linkage...")
-comprehensive_verify_data_linkage(
-    calc_train_path,
-    calc_train,
-    full_mammogram_dict,
-    roi_mask_dict
-)
-
-print("Verifying mass test data linkage...")
-comprehensive_verify_data_linkage(
-    mass_test_path,
-    mass_test,
-    full_mammogram_dict,
-    roi_mask_dict
-)
-
-print("Verifying calc test data linkage...")
-comprehensive_verify_data_linkage(
-    calc_test_path,
-    calc_test,
-    full_mammogram_dict,
-    roi_mask_dict
-)
-"""
 # Data Visualization
-"""visualisation_choice = int(input("Do you want to visualize the data? (1 for yes, 0 for no): "))
+visualisation_choice = int(input("Do you want to visualize the data? (1 for yes, 0 for no): "))
 if visualisation_choice == 1:
     visualise_data(mass_train, calc_train)
 else:
-    print("Data visualisation skipped.")"""
+    print("Data visualisation skipped.")
 
 # Update BreastCancerDataset constructor to print unique values in 'pathology' column before mapping
 class BreastCancerDataset(Dataset):
@@ -461,40 +351,6 @@ class BreastCancerDataset(Dataset):
 
         return image, mask, label
 
-def verify_dataset_integrity(dataset, num_samples=5):
-    print(f"Verifying {num_samples} random samples from the dataset...")
-    for i in range(num_samples):
-        idx = random.randint(0, len(dataset) - 1)
-        image, mask, label = dataset[idx]
-
-        print(f"Sample {i + 1}:")
-        print(f"  Image shape: {image.shape}")
-        print(f"  Mask shape: {mask.shape}")
-        print(f"  Label: {label}")
-
-        # Check if image and mask have the same dimensions
-        assert image.shape == mask.shape, f"Image and mask shapes do not match for sample {i + 1}"
-
-        # Check if label is within expected range
-        assert label in [0, 1], f"Unexpected label value {label} for sample {i + 1}"
-
-        # Visualize the sample
-        plt.figure(figsize=(15, 5))
-        plt.subplot(131)
-        plt.imshow(image.squeeze(), cmap='gray')
-        plt.title("Image")
-        plt.subplot(132)
-        plt.imshow(mask.squeeze(), cmap='gray')
-        plt.title("Mask")
-        plt.subplot(133)
-        plt.imshow(image.squeeze(), cmap='gray')
-        plt.imshow(mask.squeeze(), alpha=0.5, cmap='jet')
-        plt.title("Overlay")
-        plt.suptitle(f"Sample {i + 1}: Label = {label}")
-        plt.show()
-
-    print("Dataset integrity verification completed.")
-
 # Define transforms
 image_transform = transforms.Compose([
     transforms.Resize((224, 224)),
@@ -518,9 +374,6 @@ mask_transform = transforms.Compose([
 ])
 
 # Initialize datasets and dataloaders
-from sklearn.model_selection import GroupShuffleSplit
-
-# Assuming 'patient_id' is a column in your DataFrame
 gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
 
 # Get the indices for train and validation sets
@@ -535,92 +388,9 @@ print(train_dataset.data.columns)
 val_dataset = BreastCancerDataset(dataframe=val_data, transform=image_transform, mask_transform=mask_transform)
 test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=image_transform, mask_transform=mask_transform)
 
-verify_dataset_integrity(train_dataset)
-verify_dataset_integrity(val_dataset)
-verify_dataset_integrity(test_dataset)
 print("Train set class distribution:", np.unique(train_dataset.labels, return_counts=True))
 print("Validation set class distribution:", np.unique(val_dataset.labels, return_counts=True))
 print("Test set class distribution:", np.unique(test_dataset.labels, return_counts=True))
-
-def check_data_range(dataset):
-    """
-    Check if the image and mask pixel values are within the expected range.
-    """
-    for i in range(len(dataset)):
-        image, mask, _ = dataset[i]
-        if not (image.min() >= 0 and image.max() <= 1):
-            print(f"Image {i} has values outside [0, 1] range:")
-            print(f"  Min: {image.min().item():.4f}, Max: {image.max().item():.4f}")
-        if not (mask.min() >= 0 and mask.max() <= 1):
-            print(f"Mask {i} has values outside [0, 1] range:")
-            print(f"  Min: {mask.min().item():.4f}, Max: {mask.max().item():.4f}")
-    print("Data range check completed.")
-
-def check_mask_values(dataset, num_samples=10):
-    """
-    Check the unique values in masks and their distribution.
-    """
-    for i in range(num_samples):
-        _, mask, _ = dataset[i]
-        unique_values = torch.unique(mask)
-        print(f"Mask {i} unique values: {unique_values}")
-
-        # Print histogram of mask values
-        hist = torch.histc(mask, bins=10, min=0, max=1)
-        print(f"Mask {i} value distribution:")
-        for j, count in enumerate(hist):
-            print(f"  [{j / 10:.1f}-{(j + 1) / 10:.1f}]: {count}")
-        print()
-
-    print("Mask value check completed.")
-
-
-def check_data_consistency(train_dataset, val_dataset, test_dataset):
-    """
-    Check for data leakage between train, validation, and test sets.
-    """
-    train_images = set(train_dataset.data['image file path'])
-    val_images = set(val_dataset.data['image file path'])
-    test_images = set(test_dataset.data['image file path'])
-
-    train_val_overlap = train_images.intersection(val_images)
-    train_test_overlap = train_images.intersection(test_images)
-    val_test_overlap = val_images.intersection(test_images)
-
-    if len(train_val_overlap) > 0:
-        print(f"Data leakage between train and validation sets: {len(train_val_overlap)} images")
-        print("Sample overlapping images:")
-        for img in list(train_val_overlap)[:5]:
-            print(img)
-
-    if len(train_test_overlap) > 0:
-        print(f"Data leakage between train and test sets: {len(train_test_overlap)} images")
-
-    if len(val_test_overlap) > 0:
-        print(f"Data leakage between validation and test sets: {len(val_test_overlap)} images")
-
-    if len(train_val_overlap) == 0 and len(train_test_overlap) == 0 and len(val_test_overlap) == 0:
-        print("No data leakage detected between datasets.")
-    else:
-        print("Data leakage detected. Please fix the dataset split.")
-
-def check_label_consistency(dataset):
-    """
-    Check if labels are consistent with the content of the images and masks.
-    """
-    for i in range(len(dataset)):
-        image, mask, label = dataset[i]
-        if label == 0:  # Assuming 0 is for benign
-            assert mask.sum() < 0.3 * mask.numel(), f"Benign sample {i} has significant mask area"
-        else:  # Malignant
-            assert mask.sum() > 0, f"Malignant sample {i} has empty mask"
-    print("Labels are consistent with image and mask content.")
-
-# Additional checks
-check_data_range(train_dataset)
-check_mask_values(train_dataset)
-check_data_consistency(train_dataset, val_dataset, test_dataset)
-check_label_consistency(train_dataset)
 
 """def overlay_mask(image, mask, color=[1, 0, 0, 0.5]):  # Red with 50% opacity
     mask = mask.squeeze().numpy()  # Ensure mask is 2D
@@ -654,92 +424,6 @@ def visualize_samples(dataset, num_samples=5):
 
 visualize_samples(train_dataset)"""
 
-import torchvision.transforms.functional as TF
-
-def visualize_augmented_samples(dataset, num_samples=5):
-    fig, axes = plt.subplots(num_samples, 2, figsize=(10, 5 * num_samples))
-    for i in range(num_samples):
-        idx = np.random.randint(len(dataset))
-        original_image, _, label = dataset[idx]
-
-        # Convert tensor to PIL Image for augmentation
-        pil_image = TF.to_pil_image(original_image)
-
-        # Apply augmentations
-        augmented_image =image_transform(pil_image)
-
-        axes[i, 0].imshow(original_image.squeeze(), cmap='gray')
-        axes[i, 0].set_title(f"Original (Label: {label})")
-        axes[i, 1].imshow(augmented_image.squeeze(), cmap='gray')
-        axes[i, 1].set_title("Augmented")
-    plt.tight_layout()
-    plt.show()
-
-visualize_augmented_samples(train_dataset)
-
-def verify_data_loading(dataset, num_samples=5):
-    """
-    Verify that images, masks, and labels are correctly linked by visualizing random samples.
-    """
-    fig, axes = plt.subplots(num_samples, 3, figsize=(15, 5 * num_samples))
-    for i in range(num_samples):
-        idx = random.randint(0, len(dataset) - 1)
-        image, mask, label = dataset[idx]
-
-        axes[i, 0].imshow(image.squeeze(), cmap='gray')
-        axes[i, 0].set_title(f"Image (Label: {label})")
-        axes[i, 1].imshow(mask.squeeze(), cmap='gray')
-        axes[i, 1].set_title("Mask")
-        axes[i, 2].imshow(image.squeeze() * mask.squeeze(), cmap='gray')
-        axes[i, 2].set_title("Image with Mask")
-
-    plt.tight_layout()
-    plt.show()
-
-def verify_label_distribution(dataset):
-    """
-    Verify the distribution of labels in the dataset.
-    """
-    labels = [dataset[i][2] for i in range(len(dataset))]
-    unique, counts = np.unique(labels, return_counts=True)
-    plt.bar(unique, counts)
-    plt.title("Label Distribution")
-    plt.xlabel("Label")
-    plt.ylabel("Count")
-    plt.show()
-
-def verify_image_mask_correspondence(dataset, num_samples=5):
-    """
-    Verify that images and masks correspond to each other.
-    """
-    for i in range(num_samples):
-        idx = random.randint(0, len(dataset) - 1)
-        image, mask, label = dataset[idx]
-
-        # Check if mask is non-zero where the image has content
-        image_content = (image.squeeze() > 0.1).float()
-        mask_content = (mask.squeeze() > 0.1).float()
-
-        overlap = (image_content * mask_content).sum() / mask_content.sum()
-
-        print(f"Sample {i + 1}: Overlap between image content and mask: {overlap:.2f}")
-
-# Add these verification steps after creating your datasets
-print("Verifying training data...")
-verify_data_loading(train_dataset)
-verify_label_distribution(train_dataset)
-verify_image_mask_correspondence(train_dataset)
-
-print("\nVerifying validation data...")
-verify_data_loading(val_dataset)
-verify_label_distribution(val_dataset)
-verify_image_mask_correspondence(val_dataset)
-
-print("\nVerifying test data...")
-verify_data_loading(test_dataset)
-verify_label_distribution(test_dataset)
-verify_image_mask_correspondence(test_dataset)
-
 # Modify the DataLoader to handle the graph data
 def collate_fn(batch):
     images, masks, labels = zip(*batch)
@@ -758,35 +442,68 @@ def create_weighted_sampler(labels):
 
 train_sampler = create_weighted_sampler(train_dataset.labels)
 
-from sklearn.utils.class_weight import compute_class_weight
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-
 train_loader = DataLoader(train_dataset, batch_size=32, sampler=train_sampler, collate_fn=collate_fn)
 val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, collate_fn=collate_fn)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, collate_fn=collate_fn)
 
-def verify_batch(dataloader):
-    images, masks, labels = next(iter(dataloader))
-    print(f"Batch shape: Images {images.shape}, Masks {masks.shape}, Labels {labels.shape}")
-    print(f"Labels in batch: {labels}")
-    print(f"Image dtype: {images.dtype}, Mask dtype: {masks.dtype}, Label dtype: {labels.dtype}")
-
-verify_batch(train_loader)
-
-def verify_labels(dataset, num_samples=10):
-    for i in range(num_samples):
-        idx = np.random.randint(len(dataset))
-        _, _, label = dataset[idx]
-        print(f"Sample {i+1}: Label = {label}")
-
-verify_labels(train_dataset)
-
-# Call dataloader_visualisations function
-visualisation_choice_2 = int(input("Do you want to visualise the dataloader? (1 for yes, 0 for no): "))
+# Call dataloader_visualisations functions
+"""visualisation_choice_2 = int(input("Do you want to visualise the dataloader? (1 for yes, 0 for no): "))
 if visualisation_choice_2 == 1:
     dataloader_visualisations(train_dataset, test_dataset, train_loader, test_loader)
 else:
-    print("Dataloader visualisation skipped.")
+    print("Dataloader visualisation skipped.")"""
+
+# Call verification functions
+verification_choice = int(input("Do you want to verify the data? (1 for yes, 0 for no): "))
+if verification_choice == 1:
+    from data_verification import (comprehensive_verify_data_linkage, verify_dataset_integrity,
+                                   check_data_range, check_mask_values, check_data_consistency,
+                                   check_label_consistency, visualize_augmented_samples,
+                                   verify_data_loading, verify_label_distribution,
+                                   verify_image_mask_correspondence, verify_batch, verify_labels)
+
+    print("Verifying mass training data linkage...")
+    comprehensive_verify_data_linkage(mass_train_path, mass_train, full_mammogram_dict, roi_mask_dict)
+
+    print("Verifying calc training data linkage...")
+    comprehensive_verify_data_linkage(calc_train_path, calc_train, full_mammogram_dict, roi_mask_dict)
+
+    print("Verifying mass test data linkage...")
+    comprehensive_verify_data_linkage(mass_test_path, mass_test, full_mammogram_dict, roi_mask_dict)
+
+    print("Verifying calc test data linkage...")
+    comprehensive_verify_data_linkage(calc_test_path, calc_test, full_mammogram_dict, roi_mask_dict)
+
+    verify_dataset_integrity(train_dataset)
+    verify_dataset_integrity(val_dataset)
+    verify_dataset_integrity(test_dataset)
+
+    check_data_range(train_dataset)
+    check_mask_values(train_dataset)
+    check_data_consistency(train_dataset, val_dataset, test_dataset)
+    check_label_consistency(train_dataset)
+
+    visualize_augmented_samples(train_dataset, image_transform)
+
+    print("Verifying training data...")
+    verify_data_loading(train_dataset)
+    verify_label_distribution(train_dataset)
+    verify_image_mask_correspondence(train_dataset)
+
+    print("\nVerifying validation data...")
+    verify_data_loading(val_dataset)
+    verify_label_distribution(val_dataset)
+    verify_image_mask_correspondence(val_dataset)
+
+    print("\nVerifying test data...")
+    verify_data_loading(test_dataset)
+    verify_label_distribution(test_dataset)
+    verify_image_mask_correspondence(test_dataset)
+
+    verify_batch(train_loader)
+    verify_labels(train_dataset)
+else:
+    print("Data verification skipped.")
 
 # Initialize the ViT-GNN hybrid model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -798,7 +515,6 @@ model = SimpleCNN(num_classes=2).to(device)
 class_weights = torch.tensor(class_weights, dtype=torch.float).to(device)"""
 
 # Define loss function with class weights
-import torch.nn.functional as F
 
 class FocalLoss(nn.Module):
     def __init__(self, alpha=0.25, gamma=2):
@@ -814,16 +530,11 @@ class FocalLoss(nn.Module):
 
 criterion = FocalLoss()
 
-from torch.optim.lr_scheduler import ReduceLROnPlateau, OneCycleLR
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
-
 num_epochs = 5
 
 # Define optimizer and scheduler
 optimizer = AdamW(model.parameters(), lr=0.01, weight_decay=0.01)
 scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve
 
 # Initialize lists to store metrics for plotting
 train_losses, val_losses = [], []
