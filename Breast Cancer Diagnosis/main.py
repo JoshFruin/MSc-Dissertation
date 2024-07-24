@@ -29,11 +29,11 @@ import os
 from PIL import Image
 import random
 import matplotlib.pyplot as plt
-from data_verification import (comprehensive_verify_data_linkage, verify_dataset_integrity,
-                               check_data_range, check_mask_values, check_data_consistency,
+from data_verification import (verify_data_linkage, verify_dataset_integrity,
+                               check_mask_values, check_data_consistency,
                                check_label_consistency, visualize_augmented_samples,
                                verify_data_loading, verify_label_distribution,
-                               verify_image_mask_correspondence, verify_batch, verify_labels)
+                               verify_image_mask_correspondence, verify_batch, verify_labels) #check_data_range,
 
 
 # Suppress all warnings globally
@@ -313,11 +313,10 @@ else:
 
 # Update BreastCancerDataset constructor to print unique values in 'pathology' column before mapping
 class BreastCancerDataset(Dataset):
-    def __init__(self, dataframe, transform=None, mask_transform=None, threshold_mask=False):
+    def __init__(self, dataframe, transform=None, mask_transform=None):
         self.data = dataframe
         self.transform = transform
         self.mask_transform = mask_transform
-        self.threshold_mask = threshold_mask
 
         # Filter out rows with missing masks
         self.data = self.data.dropna(subset=[self.data.columns[13]])  # Use the 14th column (index 13) for mask path
@@ -334,31 +333,19 @@ class BreastCancerDataset(Dataset):
         img_name = self.data.iloc[idx, 11]  # Full mammogram image
         mask_name = self.data.iloc[idx, 13]  # ROI mask
 
-        image = Image.open(img_name).convert("L")  # Ensure image is grayscale
-        mask = Image.open(mask_name).convert("L")  # Ensure mask is grayscale
+        image = Image.open(img_name).convert("RGB")
+        mask = Image.open(mask_name).convert("RGB")  # Convert mask to RGB
 
         if self.transform is not None:
             image = self.transform(image)
         if self.mask_transform is not None:
             mask = self.mask_transform(mask)
-        else:
-            mask = transforms.ToTensor()(mask)
-
-        if self.threshold_mask:
-            mask = (mask > 0.5).float()  # Threshold mask to binary values
 
         label = self.labels[idx]
 
         return image, mask, label
 
 # Define transforms
-image_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    #transforms.Lambda(lambda x: x / 255.0),  # Scale to [0, 1]
-    transforms.Normalize(mean=[0.485], std=[0.229]),
-])
-
 train_transform = transforms.Compose([
     transforms.RandomHorizontalFlip(),
     transforms.RandomVerticalFlip(),
@@ -367,6 +354,11 @@ train_transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
     #transforms.Lambda(lambda x: x / x.max())  # Normalize to [0,1]
+])
+image_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 mask_transform = transforms.Compose([
     transforms.Resize((224, 224)),
@@ -456,29 +448,29 @@ else:
 # Call verification functions
 verification_choice = int(input("Do you want to verify the data? (1 for yes, 0 for no): "))
 if verification_choice == 1:
-    from data_verification import (comprehensive_verify_data_linkage, verify_dataset_integrity,
-                                   check_data_range, check_mask_values, check_data_consistency,
+    from data_verification import (verify_data_linkage, verify_dataset_integrity,
+                                   check_mask_values, check_data_consistency,
                                    check_label_consistency, visualize_augmented_samples,
                                    verify_data_loading, verify_label_distribution,
-                                   verify_image_mask_correspondence, verify_batch, verify_labels)
+                                   verify_image_mask_correspondence, verify_batch, verify_labels) #check_data_range,
 
     print("Verifying mass training data linkage...")
-    comprehensive_verify_data_linkage(mass_train_path, mass_train, full_mammogram_dict, roi_mask_dict)
+    verify_data_linkage(mass_train_path, mass_train, full_mammogram_dict, roi_mask_dict)
 
     print("Verifying calc training data linkage...")
-    comprehensive_verify_data_linkage(calc_train_path, calc_train, full_mammogram_dict, roi_mask_dict)
+    verify_data_linkage(calc_train_path, calc_train, full_mammogram_dict, roi_mask_dict)
 
     print("Verifying mass test data linkage...")
-    comprehensive_verify_data_linkage(mass_test_path, mass_test, full_mammogram_dict, roi_mask_dict)
+    verify_data_linkage(mass_test_path, mass_test, full_mammogram_dict, roi_mask_dict)
 
     print("Verifying calc test data linkage...")
-    comprehensive_verify_data_linkage(calc_test_path, calc_test, full_mammogram_dict, roi_mask_dict)
+    verify_data_linkage(calc_test_path, calc_test, full_mammogram_dict, roi_mask_dict)
 
     verify_dataset_integrity(train_dataset)
     verify_dataset_integrity(val_dataset)
     verify_dataset_integrity(test_dataset)
 
-    check_data_range(train_dataset)
+    #check_data_range(train_dataset)
     check_mask_values(train_dataset)
     check_data_consistency(train_dataset, val_dataset, test_dataset)
     check_label_consistency(train_dataset)
@@ -509,13 +501,39 @@ else:
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 #model = ViTGNNHybrid(num_classes=2, dropout_rate=0.3).to(device)
-model = SimpleCNN(num_classes=2).to(device)
+#model = SimpleCNN(num_classes=2).to(device)
+import torchvision.models as models
+import torch.nn as nn
+
+class TransferLearningModel(nn.Module):
+    def __init__(self, num_classes=2):
+        super(TransferLearningModel, self).__init__()
+        self.resnet = models.resnet18(pretrained=True)
+        self.resnet.conv1 = nn.Conv2d(6, 64, kernel_size=7, stride=2, padding=3, bias=False)
+
+        # Unfreeze more layers
+        for param in self.resnet.layer4.parameters():
+            param.requires_grad = True
+
+        self.resnet.fc = nn.Sequential(
+            nn.Linear(self.resnet.fc.in_features, 256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(256, num_classes)
+        )
+
+    def forward(self, images, masks):
+        x = torch.cat([images, masks], dim=1)
+        return self.resnet(x)
+
+
+# Usage
+model = TransferLearningModel(num_classes=2).to(device)
 # Calculate class weights
 """class_weights = compute_class_weight('balanced', classes=np.unique(train_dataset.labels.numpy()), y=train_dataset.labels.numpy())
 class_weights = torch.tensor(class_weights, dtype=torch.float).to(device)"""
 
 # Define loss function with class weights
-
 class FocalLoss(nn.Module):
     def __init__(self, alpha=0.25, gamma=2):
         super(FocalLoss, self).__init__()
@@ -533,8 +551,8 @@ criterion = FocalLoss()
 num_epochs = 5
 
 # Define optimizer and scheduler
-optimizer = AdamW(model.parameters(), lr=0.01, weight_decay=0.01)
-scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5)
 
 # Initialize lists to store metrics for plotting
 train_losses, val_losses = [], []
@@ -596,12 +614,11 @@ for epoch in range(num_epochs):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        scheduler.step()
 
         train_loss += loss.item()
-        with torch.no_grad():  # Add this line
-            preds = F.softmax(outputs, dim=1)[:, 1]  # Get probabilities for the positive class
-            train_preds.extend(preds.cpu().detach().numpy())  # Add detach() here
+        with torch.no_grad():
+            preds = F.softmax(outputs, dim=1)[:, 1]
+            train_preds.extend(preds.cpu().detach().numpy())
         train_labels.extend(labels.cpu().numpy())
 
     train_loss /= len(train_loader)
@@ -612,6 +629,9 @@ for epoch in range(num_epochs):
     # Validation
     val_loss, val_acc, val_precision, val_recall, val_f1, val_auc, val_cm, _, _ = evaluate(model, val_loader, device)
 
+    # Step the scheduler with the validation loss
+    scheduler.step(val_loss)
+
     # Store metrics for plotting
     train_losses.append(train_loss)
     val_losses.append(val_loss)
@@ -621,11 +641,10 @@ for epoch in range(num_epochs):
     # Print metrics
     print(f'Epoch [{epoch + 1}/{num_epochs}]')
     print(f'Train - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}')
-    print(
-        f'Val - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Prec: {val_precision:.4f}, Rec: {val_recall:.4f}, F1: {val_f1:.4f}, AUC: {val_auc:.4f}')
+    print(f'Val - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Prec: {val_precision:.4f}, Rec: {val_recall:.4f}, F1: {val_f1:.4f}, AUC: {val_auc:.4f}')
     print("Validation Confusion Matrix:")
     print(val_cm)
-    print(f"Learning rate: {scheduler.get_last_lr()[0]:.6f}")
+    print(f"Learning rate: {optimizer.param_groups[0]['lr']:.6f}")
 
     # Early stopping and model saving
     if val_loss < best_val_loss:

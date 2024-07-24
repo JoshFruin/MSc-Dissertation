@@ -7,7 +7,7 @@ import random
 import os
 import torchvision.transforms.functional as TF
 
-def comprehensive_verify_data_linkage(original_csv_path, processed_df, full_mammogram_dict, roi_mask_dict,
+def verify_data_linkage(original_csv_path, processed_df, full_mammogram_dict, roi_mask_dict,
                                       num_samples=5):
     """
     Verify that images, masks, and labels are correctly linked from original CSV through preprocessing.
@@ -27,9 +27,19 @@ def comprehensive_verify_data_linkage(original_csv_path, processed_df, full_mamm
     # Load original CSV
     original_df = pd.read_csv(original_csv_path)
 
-    for i in range(num_samples):
-        # Randomly select a row from the processed dataframe
-        processed_row = processed_df.sample(n=1).iloc[0]
+    # Determine the number of samples to verify
+    num_samples = min(num_samples, len(processed_df))
+
+    if num_samples == 0:
+        print("No samples available for verification.")
+        return
+
+    # Get unique indices to sample
+    sample_indices = random.sample(range(len(processed_df)), num_samples)
+
+    for i, idx in enumerate(sample_indices):
+        # Select a row from the processed dataframe
+        processed_row = processed_df.iloc[idx]
 
         # Find the corresponding row in the original CSV
         original_row = original_df[original_df['patient_id'] == processed_row['patient_id']].iloc[0]
@@ -94,6 +104,8 @@ def comprehensive_verify_data_linkage(original_csv_path, processed_df, full_mamm
         print(f"  Label: {label}")
         print("\n")
 
+    print("Data linkage verification completed.")
+
 def verify_dataset_integrity(dataset, num_samples=5):
     print(f"Verifying {num_samples} random samples from the dataset...")
     for i in range(num_samples):
@@ -128,10 +140,10 @@ def verify_dataset_integrity(dataset, num_samples=5):
 
     print("Dataset integrity verification completed.")
 
-def check_data_range(dataset):
-    """
+"""def check_data_range(dataset):
+
     Check if the image and mask pixel values are within the expected range.
-    """
+
     for i in range(len(dataset)):
         image, mask, _ = dataset[i]
         if not (image.min() >= 0 and image.max() <= 1):
@@ -140,7 +152,7 @@ def check_data_range(dataset):
         if not (mask.min() >= 0 and mask.max() <= 1):
             print(f"Mask {i} has values outside [0, 1] range:")
             print(f"  Min: {mask.min().item():.4f}, Max: {mask.max().item():.4f}")
-    print("Data range check completed.")
+    print("Data range check completed.")"""
 
 def check_mask_values(dataset, num_samples=10):
     """
