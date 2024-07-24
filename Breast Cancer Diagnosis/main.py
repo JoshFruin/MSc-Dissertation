@@ -19,21 +19,18 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm  # Import tqdm for progress bars
 from data_visualisations import visualise_data, dataloader_visualisations
-from models import ViTGNNHybrid, SimpleCNN
 from torch_geometric.data import Data, Batch
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.model_selection import GroupShuffleSplit
-import pandas as pd
-import os
 from PIL import Image
 import random
-import matplotlib.pyplot as plt
 from data_verification import (verify_data_linkage, verify_dataset_integrity,
                                check_mask_values, check_data_consistency,
                                check_label_consistency, visualize_augmented_samples,
                                verify_data_loading, verify_label_distribution,
                                verify_image_mask_correspondence, verify_batch, verify_labels) #check_data_range,
+from models import ViTGNNHybrid, SimpleCNN, TransferLearningModel
 
 
 # Suppress all warnings globally
@@ -502,30 +499,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 #model = ViTGNNHybrid(num_classes=2, dropout_rate=0.3).to(device)
 #model = SimpleCNN(num_classes=2).to(device)
-import torchvision.models as models
-import torch.nn as nn
-
-class TransferLearningModel(nn.Module):
-    def __init__(self, num_classes=2):
-        super(TransferLearningModel, self).__init__()
-        self.resnet = models.resnet18(pretrained=True)
-        self.resnet.conv1 = nn.Conv2d(6, 64, kernel_size=7, stride=2, padding=3, bias=False)
-
-        # Unfreeze more layers
-        for param in self.resnet.layer4.parameters():
-            param.requires_grad = True
-
-        self.resnet.fc = nn.Sequential(
-            nn.Linear(self.resnet.fc.in_features, 256),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(256, num_classes)
-        )
-
-    def forward(self, images, masks):
-        x = torch.cat([images, masks], dim=1)
-        return self.resnet(x)
-
 
 # Usage
 model = TransferLearningModel(num_classes=2).to(device)
@@ -548,7 +521,7 @@ class FocalLoss(nn.Module):
 
 criterion = FocalLoss()
 
-num_epochs = 5
+num_epochs = 10
 
 # Define optimizer and scheduler
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
@@ -591,7 +564,6 @@ def evaluate(model, data_loader, device):
 
 # Training loop
 print("Training...")
-num_epochs = 5
 best_val_loss = float('inf')
 patience = 10
 epochs_without_improvement = 0

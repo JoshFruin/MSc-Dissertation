@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torchvision.models as models
 from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
 from torch_geometric.data import Data, Batch
+import torchvision.models as models
 
 class ViTGNNHybrid(nn.Module):
     def __init__(self, num_classes=2, dropout_rate=0.3):
@@ -53,6 +54,27 @@ class ViTGNNHybrid(nn.Module):
         x = self.classifier(x)
 
         return x
+
+class TransferLearningModel(nn.Module):
+    def __init__(self, num_classes=2):
+        super(TransferLearningModel, self).__init__()
+        self.resnet = models.resnet18(pretrained=True)
+        self.resnet.conv1 = nn.Conv2d(6, 64, kernel_size=7, stride=2, padding=3, bias=False)
+
+        # Unfreeze more layers
+        for param in self.resnet.layer4.parameters():
+            param.requires_grad = True
+
+        self.resnet.fc = nn.Sequential(
+            nn.Linear(self.resnet.fc.in_features, 256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(256, num_classes)
+        )
+
+    def forward(self, images, masks):
+        x = torch.cat([images, masks], dim=1)
+        return self.resnet(x)
 
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes=2):
