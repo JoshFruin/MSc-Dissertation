@@ -5,54 +5,52 @@ import torchvision.models as models
 from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
 from torch_geometric.data import Data, Batch
 import torchvision.models as models
+from torch_geometric.utils import grid, add_self_loops
+from transformers import ViTModel
+from torch_geometric.data import Data as GeometricData
+
 
 class ViTGNNHybrid(nn.Module):
-    def __init__(self, num_classes=2, dropout_rate=0.3):
+    def __init__(self, num_classes=2):
         super(ViTGNNHybrid, self).__init__()
 
-        # ViT Feature Extractor
+        # Vision Transformer
         self.vit = models.vit_b_16(pretrained=True)
-        self.vit.heads = nn.Sequential(
-            nn.Linear(768, 256),
-            nn.BatchNorm1d(256),
+        self.vit.heads = nn.Identity()  # Remove the final classification head
+
+        # GNN layers
+        self.gcn1 = GCNConv(768, 512)
+        self.gcn2 = GCNConv(512, 256)
+        self.gcn3 = GCNConv(256, 128)
+
+        # Final classification head
+        self.classifier = nn.Sequential(
+            nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(256, 128)
+            nn.Linear(64, num_classes)
         )
 
-        # Adapt ViT for grayscale input
-        self.vit.conv_proj = nn.Conv2d(1, 768, kernel_size=(16, 16), stride=(16, 16))
+    def forward(self, images, edge_index):
+        # Pass through ViT
+        x = self.vit(images)
 
-        # GNN Layers
-        self.conv1 = GCNConv(128, 64)
-        self.bn1 = nn.BatchNorm1d(64)
-        self.conv2 = GCNConv(64, 32)
-        self.bn2 = nn.BatchNorm1d(32)
-
-        # Final classification layer
-        self.classifier = nn.Linear(32, num_classes)
-
-    def forward(self, x, mask):
-        device = x.device
+        # Create graph data structure
         batch_size = x.size(0)
+        graph_data = GeometricData(x=x.view(-1, x.size(-1)), edge_index=edge_index)
 
-        # ViT Feature Extraction
-        x = self.vit(x)  # Shape: (batch_size, 128)
+        # Pass through GNN
+        x = self.gcn1(graph_data.x, graph_data.edge_index)
+        x = F.relu(x)
+        x = self.gcn2(x, graph_data.edge_index)
+        x = F.relu(x)
+        x = self.gcn3(x, graph_data.edge_index)
+        x = F.relu(x)
 
-        # Create a batch of fully connected graphs
-        edge_index = torch.stack([torch.arange(batch_size).repeat_interleave(batch_size),
-                                  torch.arange(batch_size).repeat(batch_size)]).to(device)
-
-        # GNN Layers
-        x = F.elu(self.bn1(self.conv1(x, edge_index)))
-        x = F.elu(self.bn2(self.conv2(x, edge_index)))
-
-        # Global Pooling
-        x = global_mean_pool(x, torch.arange(batch_size).to(device))
+        # Reshape for classification
+        x = x.view(batch_size, -1, x.size(-1)).mean(dim=1)
 
         # Classification
         x = self.classifier(x)
-
         return x
 
 class TransferLearningModel(nn.Module):

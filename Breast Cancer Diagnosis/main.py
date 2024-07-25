@@ -15,7 +15,7 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms.functional as TF
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau, OneCycleLR
-from torch.optim import AdamW
+from torch.optim import AdamW, Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm  # Import tqdm for progress bars
 from data_visualisations import visualise_data, dataloader_visualisations
@@ -31,7 +31,8 @@ from data_verification import (verify_data_linkage, verify_dataset_integrity,
                                verify_data_loading, verify_label_distribution,
                                verify_image_mask_correspondence, verify_batch, verify_labels) #check_data_range,
 from models import ViTGNNHybrid, SimpleCNN, TransferLearningModel
-
+import torch_geometric
+from torch_geometric.utils import dense_to_sparse
 
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
@@ -361,7 +362,16 @@ mask_transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
 ])
+train_transforms = transforms.Compose([
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomVerticalFlip(),
+    transforms.RandomRotation(30),
+    transforms.ToTensor(),
+])
 
+val_test_transforms = transforms.Compose([
+    transforms.ToTensor(),
+])
 # Initialize datasets and dataloaders
 gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
 
@@ -371,55 +381,30 @@ train_idx, val_idx = next(gss.split(mam_train_data, groups=mam_train_data['patie
 # Split the data
 train_data = mam_train_data.iloc[train_idx]
 val_data = mam_train_data.iloc[val_idx]
-
-train_dataset = BreastCancerDataset(dataframe=train_data, transform=image_transform, mask_transform=mask_transform)
+train_dataset = BreastCancerDataset(dataframe=train_data, transform=train_transform)
+val_dataset = BreastCancerDataset(dataframe=val_data, transform=val_test_transforms)
+test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=val_test_transforms)
+"""train_dataset = BreastCancerDataset(dataframe=train_data, transform=image_transform, mask_transform=mask_transform)
 print(train_dataset.data.columns)
 val_dataset = BreastCancerDataset(dataframe=val_data, transform=image_transform, mask_transform=mask_transform)
-test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=image_transform, mask_transform=mask_transform)
+test_dataset = BreastCancerDataset(dataframe=mam_test_data, transform=image_transform, mask_transform=mask_transform)"""
 
 print("Train set class distribution:", np.unique(train_dataset.labels, return_counts=True))
 print("Validation set class distribution:", np.unique(val_dataset.labels, return_counts=True))
 print("Test set class distribution:", np.unique(test_dataset.labels, return_counts=True))
 
-"""def overlay_mask(image, mask, color=[1, 0, 0, 0.5]):  # Red with 50% opacity
-    mask = mask.squeeze().numpy()  # Ensure mask is 2D
-    colored_mask = np.zeros((*mask.shape, 4))
-    colored_mask[mask > 0] = color
-
-    plt.imshow(image.squeeze(), cmap='gray')
-    plt.imshow(colored_mask)
-    plt.axis('off')
-
-
-def visualize_samples(dataset, num_samples=5):
-    fig, axes = plt.subplots(num_samples, 3, figsize=(15, 5 * num_samples))
-    for i in range(num_samples):
-        idx = np.random.randint(len(dataset))
-        image, mask, label = dataset[idx]
-
-        axes[i, 0].imshow(image.squeeze(), cmap='gray')
-        axes[i, 0].set_title(f"Image (Label: {label})")
-        axes[i, 0].axis('off')
-
-        axes[i, 1].imshow(mask.squeeze(), cmap='gray')
-        axes[i, 1].set_title("Mask")
-        axes[i, 1].axis('off')
-
-        overlay_mask(image, mask, ax=axes[i, 2])
-        axes[i, 2].set_title("Image with Mask")
-
-    plt.tight_layout()
-    plt.show()
-
-visualize_samples(train_dataset)"""
-
-# Modify the DataLoader to handle the graph data
 def collate_fn(batch):
     images, masks, labels = zip(*batch)
     images = torch.stack(images)
     masks = torch.stack(masks)
     labels = torch.tensor(labels)
-    return images, masks, labels
+
+    # Create a fully connected graph (for simplicity, other strategies can be used)
+    num_nodes = images.size(0)
+    dense_adj = torch.ones((num_nodes, num_nodes)) - torch.eye(num_nodes)  # Dense adjacency matrix
+    edge_index, _ = dense_to_sparse(dense_adj)  # Convert to sparse representation
+
+    return images, masks, labels, edge_index
 
 from torch.utils.data import WeightedRandomSampler
 
@@ -431,16 +416,16 @@ def create_weighted_sampler(labels):
 
 train_sampler = create_weighted_sampler(train_dataset.labels)
 
-train_loader = DataLoader(train_dataset, batch_size=32, sampler=train_sampler, collate_fn=collate_fn)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, collate_fn=collate_fn)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, collate_fn=collate_fn)
+train_loader = DataLoader(train_dataset, batch_size=64, sampler=train_sampler, collate_fn=collate_fn)
+val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, collate_fn=collate_fn)
+test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, collate_fn=collate_fn)
 
 # Call dataloader_visualisations functions
-"""visualisation_choice_2 = int(input("Do you want to visualise the dataloader? (1 for yes, 0 for no): "))
+visualisation_choice_2 = int(input("Do you want to visualise the dataloader? (1 for yes, 0 for no): "))
 if visualisation_choice_2 == 1:
     dataloader_visualisations(train_dataset, test_dataset, train_loader, test_loader)
 else:
-    print("Dataloader visualisation skipped.")"""
+    print("Dataloader visualisation skipped.")
 
 # Call verification functions
 verification_choice = int(input("Do you want to verify the data? (1 for yes, 0 for no): "))
@@ -497,11 +482,10 @@ else:
 # Initialize the ViT-GNN hybrid model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
-#model = ViTGNNHybrid(num_classes=2, dropout_rate=0.3).to(device)
+model = ViTGNNHybrid(num_classes=2).to(device)
 #model = SimpleCNN(num_classes=2).to(device)
+#model = TransferLearningModel(num_classes=2).to(device)
 
-# Usage
-model = TransferLearningModel(num_classes=2).to(device)
 # Calculate class weights
 """class_weights = compute_class_weight('balanced', classes=np.unique(train_dataset.labels.numpy()), y=train_dataset.labels.numpy())
 class_weights = torch.tensor(class_weights, dtype=torch.float).to(device)"""
@@ -519,14 +503,194 @@ class FocalLoss(nn.Module):
         F_loss = self.alpha * (1-pt)**self.gamma * CE_loss
         return F_loss.mean()
 
-criterion = FocalLoss()
+#criterion = FocalLoss()
 
-num_epochs = 10
+#num_epochs = 5
 
 # Define optimizer and scheduler
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5)
+criterion = nn.CrossEntropyLoss()
+optimizer = Adam(model.parameters(), lr=1e-4)
+scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=5, verbose=True)
 
+"""# Training loop
+print("Training...")
+best_val_loss = float('inf')
+patience = 10
+epochs_without_improvement = 0
+"""
+# Training loop
+def train(model, train_loader, criterion, optimizer, device):
+    model.train()
+    running_loss = 0.0
+    for images, masks, labels, edge_index in tqdm(train_loader, desc='Training'):
+        images, masks, labels, edge_index = images.to(device), masks.to(device), labels.to(device), edge_index.to(
+            device)
+
+        optimizer.zero_grad()
+        outputs = model(images, edge_index)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item()
+    return running_loss / len(train_loader)
+
+
+# Evaluation loop
+def evaluate(model, val_loader, criterion, device):
+    model.eval()
+    running_loss = 0.0
+    all_labels = []
+    all_preds = []
+    with torch.no_grad():
+        for images, masks, labels, edge_index in tqdm(val_loader, desc='Evaluating'):
+            images, masks, labels, edge_index = images.to(device), masks.to(device), labels.to(device), edge_index.to(
+                device)
+
+            outputs = model(images, edge_index)
+            loss = criterion(outputs, labels)
+            running_loss += loss.item()
+
+            preds = torch.argmax(outputs, dim=1)
+            all_labels.extend(labels.cpu().numpy())
+            all_preds.extend(preds.cpu().numpy())
+
+    accuracy = accuracy_score(all_labels, all_preds)
+    return running_loss / len(val_loader), accuracy
+
+
+# Testing loop
+def test(model, test_loader, criterion, device):
+    model.eval()
+    running_loss = 0.0
+    all_labels = []
+    all_preds = []
+    with torch.no_grad():
+        for images, masks, labels, edge_index in tqdm(test_loader, desc='Testing'):
+            images, masks, labels, edge_index = images.to(device), masks.to(device), labels.to(device), edge_index.to(
+                device)
+
+            outputs = model(images, edge_index)
+            loss = criterion(outputs, labels)
+            running_loss += loss.item()
+
+            preds = torch.argmax(outputs, dim=1)
+            all_labels.extend(labels.cpu().numpy())
+            all_preds.extend(preds.cpu().numpy())
+
+    accuracy = accuracy_score(all_labels, all_preds)
+    return running_loss / len(test_loader), accuracy
+
+
+# Main training loop
+num_epochs = 5
+best_val_loss = float('inf')
+print("Training...")
+for epoch in range(num_epochs):
+    print(f"Epoch {epoch + 1}/{num_epochs}")
+
+    train_loss = train(model, train_loader, criterion, optimizer, device)
+    val_loss, val_accuracy = evaluate(model, val_loader, criterion, device)
+
+    print(f"Train Loss: {train_loss:.4f}")
+    print(f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}")
+
+    scheduler.step(val_loss)
+
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        torch.save(model.state_dict(), 'best_model.pth')
+        print("Model saved!")
+
+# Load the best model
+model.load_state_dict(torch.load('best_model.pth'))
+
+# Test the best model
+test_loss, test_accuracy = test(model, test_loader, criterion, device)
+print(f"Test Loss: {test_loss:.4f}, Test Accuracy: {test_accuracy:.4f}")
+
+print("Finished Training!")
+
+"""for epoch in range(num_epochs):
+    model.train()
+    train_loss = 0.0
+    train_preds, train_labels = [], []
+
+    for images, masks, labels in tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs} - Training'):
+        images, masks, labels = images.to(device), masks.to(device), labels.to(device)
+
+        optimizer.zero_grad()
+        outputs = model(images, masks)
+        loss = criterion(outputs, labels)
+        loss.backward()
+
+        # Gradient clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+        optimizer.step()
+        scheduler.step()
+
+        train_loss += loss.item()
+        with torch.no_grad():
+            preds = F.softmax(outputs, dim=1)[:, 1]
+            train_preds.extend(preds.cpu().detach().numpy())
+        train_labels.extend(labels.cpu().numpy())
+
+    train_loss /= len(train_loader)
+    train_preds = np.array(train_preds)
+    train_labels = np.array(train_labels)
+    train_acc = accuracy_score(train_labels, (train_preds > 0.5).astype(int))
+
+    # Validation
+    model.eval()
+    val_loss = 0.0
+    val_preds, val_labels = [], []
+
+    with torch.no_grad():
+        for images, masks, labels in val_loader:
+            images, masks, labels = images.to(device), masks.to(device), labels.to(device)
+            outputs = model(images, masks)
+            loss = criterion(outputs, labels)
+            val_loss += loss.item()
+
+            preds = F.softmax(outputs, dim=1)[:, 1]
+            val_preds.extend(preds.cpu().numpy())
+            val_labels.extend(labels.cpu().numpy())
+
+    val_loss /= len(val_loader)
+    val_preds = np.array(val_preds)
+    val_labels = np.array(val_labels)
+
+    val_acc = accuracy_score(val_labels, (val_preds > 0.5).astype(int))
+    val_precision = precision_score(val_labels, (val_preds > 0.5).astype(int), average='weighted')
+    val_recall = recall_score(val_labels, (val_preds > 0.5).astype(int), average='weighted')
+    val_f1 = f1_score(val_labels, (val_preds > 0.5).astype(int), average='weighted')
+    val_auc = roc_auc_score(val_labels, val_preds)
+    val_cm = confusion_matrix(val_labels, (val_preds > 0.5).astype(int))
+
+    # Print metrics
+    print(f'Epoch [{epoch + 1}/{num_epochs}]')
+    print(f'Train - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}')
+    print(
+        f'Val - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, Prec: {val_precision:.4f}, Rec: {val_recall:.4f}, F1: {val_f1:.4f}, AUC: {val_auc:.4f}')
+    print("Validation Confusion Matrix:")
+    print(val_cm)
+    print(f"Learning rate: {optimizer.param_groups[0]['lr']:.6f}")
+
+    # Early stopping and model saving
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        epochs_without_improvement = 0
+        torch.save(model.state_dict(), 'best_model.pth')
+        print("Saved best model")
+    else:
+        epochs_without_improvement += 1
+        if epochs_without_improvement >= patience:
+            print("Early stopping")
+            break
+
+print('Finished Training')"""
+"""
 # Initialize lists to store metrics for plotting
 train_losses, val_losses = [], []
 train_accuracies, val_accuracies = [], []
@@ -581,7 +745,7 @@ for epoch in range(num_epochs):
         images, masks, labels = images.to(device), masks.to(device), labels.to(device)
 
         optimizer.zero_grad()
-        outputs = model(images, masks)
+        outputs = model(images, masks)  # Pass both images and masks
         loss = criterion(outputs, labels)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -602,7 +766,7 @@ for epoch in range(num_epochs):
     val_loss, val_acc, val_precision, val_recall, val_f1, val_auc, val_cm, _, _ = evaluate(model, val_loader, device)
 
     # Step the scheduler with the validation loss
-    scheduler.step(val_loss)
+    scheduler.step()
 
     # Store metrics for plotting
     train_losses.append(train_loss)
@@ -652,4 +816,4 @@ plt.title('Learning Curves - Accuracy')
 
 plt.tight_layout()
 plt.savefig('learning_curves.png')
-plt.close()
+plt.close()"""
