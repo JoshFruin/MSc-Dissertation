@@ -308,7 +308,6 @@ if visualisation_choice == 1:
 else:
     print("Data visualisation skipped.")"""
 
-
 class BreastCancerDataset(Dataset):
     def __init__(self, dataframe, transform=None, mask_transform=None):
         self.data = dataframe
@@ -329,12 +328,18 @@ class BreastCancerDataset(Dataset):
         self.process_calc_distribution()
         self.process_subtlety()
         self.process_left_or_right()
+        self.process_abnormality_type()
+        self.process_mass_shape()
+        self.process_mass_margins()
 
         # Combine all numerical features
         self.numerical_features = pd.concat([self.subtlety, self.breast_density], axis=1)
 
         # Combine all categorical features
-        self.categorical_features = pd.concat([self.calc_type, self.calc_distribution, self.left_or_right], axis=1)
+        self.categorical_features = pd.concat([
+            self.calc_type, self.calc_distribution, self.left_or_right,
+            self.abnormality_type, self.mass_shape, self.mass_margins
+        ], axis=1)
 
     def process_breast_density(self):
         if 'breast_density' in self.data.columns:
@@ -377,6 +382,37 @@ class BreastCancerDataset(Dataset):
             self.left_or_right = pd.DataFrame(np.zeros((len(self.data), 2)), index=self.data.index,
                                               columns=['breast_LEFT', 'breast_RIGHT'])
 
+    def process_abnormality_type(self):
+        if 'abnormality_type' in self.data.columns:
+            abnormality_mapping = {'mass': 0, 'calcification': 1}
+            self.abnormality_type = pd.get_dummies(self.data['abnormality_type'].map(abnormality_mapping).fillna(2), prefix='abnormality')
+        else:
+            self.abnormality_type = pd.DataFrame(np.zeros((len(self.data), 2)), index=self.data.index,
+                                                 columns=['abnormality_mass', 'abnormality_calcification'])
+
+    def process_mass_shape(self):
+        if 'mass_shape' in self.data.columns:
+            shape_mapping = {
+                'IRREGULAR-ARCHITECTURAL_DISTORTION': 0, 'ARCHITECTURAL_DISTORTION': 1, 'OVAL': 2,
+                'IRREGULAR': 3, 'LOBULATED-LYMPH_NODE': 4, 'LOBULATED': 5, 'FOCAL_ASYMMETRIC_DENSITY': 6,
+                'LYMPH_NODE': 7, 'ROUND': 8, 'N/A': 9
+            }
+            self.mass_shape = pd.get_dummies(self.data['mass_shape'].map(shape_mapping).fillna(9), prefix='shape')
+        else:
+            self.mass_shape = pd.DataFrame(np.zeros((len(self.data), 10)), index=self.data.index,
+                                           columns=[f'shape_{i}' for i in range(10)])
+
+    def process_mass_margins(self):
+        if 'mass_margins' in self.data.columns:
+            margins_mapping = {
+                'SPICULATED': 0, 'ILL_DEFINED': 1, 'CIRCUMSCRIBED': 2, 'OBSCURED': 3,
+                'N/A': 4, 'MICROLOBULATED': 5, 'CIRCUMSCRIBED-ILL_DEFINED': 6
+            }
+            self.mass_margins = pd.get_dummies(self.data['mass_margins'].map(margins_mapping).fillna(4), prefix='margins')
+        else:
+            self.mass_margins = pd.DataFrame(np.zeros((len(self.data), 7)), index=self.data.index,
+                                             columns=[f'margins_{i}' for i in range(7)])
+
     def __len__(self):
         return len(self.data)
 
@@ -402,80 +438,43 @@ class BreastCancerDataset(Dataset):
 
         return image, mask, numerical, categorical, label
 
-class MultimodalBreastCancerModel(nn.Module):
-    def __init__(self, num_numerical_features, num_categorical_features):
-        super(MultimodalBreastCancerModel, self).__init__()
-
-        # Image processing
-        self.resnet = models.resnet50(pretrained=True)
-        self.resnet.fc = nn.Identity()  # Remove the final fully connected layer
-
-        # Mask processing
-        self.mask_conv = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(128, 256, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1))
-        )
-
-        # Numerical features processing
-        self.numerical_fc = nn.Sequential(
-            nn.Linear(num_numerical_features, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32)
-        )
-
-        # Categorical features processing
-        self.categorical_fc = nn.Sequential(
-            nn.Linear(num_categorical_features, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64)
-        )
-
-        # Combine all features
-        combined_features = 2048 + 256 + 32 + 64  # ResNet output + mask output + numerical + categorical
-        self.classifier = nn.Sequential(
-            nn.Linear(combined_features, 512),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(512, 128),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(128, 2)  # Binary classification
-        )
-
-    def forward(self, image, mask, numerical, categorical):
-        # Process image
-        image_features = self.resnet(image)
-
-        # Process mask
-        mask_features = self.mask_conv(mask).view(mask.size(0), -1)
-
-        # Process numerical features
-        numerical_features = self.numerical_fc(numerical)
-
-        # Process categorical features
-        categorical_features = self.categorical_fc(categorical)
-
-        # Combine all features
-        combined = torch.cat((image_features, mask_features, numerical_features, categorical_features), dim=1)
-
-        # Final classification
-        output = self.classifier(combined)
-
-        return output
-
-
 # Create train and validation splits
 train_df, val_df = train_test_split(mam_train_data, test_size=0.2, random_state=42)
 
-# Define transformations
-transform = transforms.Compose([
+# Print basic statistics of the dataset
+print(train_df.describe())
+
+# Check for class imbalance
+print(train_df['pathology'].value_counts(normalize=True))
+
+# Check for missing values
+print(train_df.isnull().sum())
+
+"""# Check the distribution of numerical features
+for col in train_df.select_dtypes(include=[np.number]).columns:
+    plt.figure(figsize=(10, 4))
+    sns.histplot(train_df[col], kde=True)
+    plt.title(f'Distribution of {col}')
+    plt.show()
+
+# Check the distribution of categorical features
+for col in train_df.select_dtypes(include=['object']).columns:
+    print(train_df[col].value_counts(normalize=True))"""
+
+# Define transformations with data augmentation
+train_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomVerticalFlip(),
+    transforms.RandomRotation(20),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+
+val_transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -485,59 +484,157 @@ mask_transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor()
 ])
-
-# Create datasets
-train_dataset = BreastCancerDataset(train_df, transform=transform, mask_transform=mask_transform)
-val_dataset = BreastCancerDataset(val_df, transform=transform, mask_transform=mask_transform)
-
-# Create data loaders
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-
-# Initialize the model
-num_numerical_features = train_dataset.numerical_features.shape[1] if not train_dataset.numerical_features.empty else 0
-num_categorical_features = train_dataset.categorical_features.shape[
-    1] if not train_dataset.categorical_features.empty else 0
-model = MultimodalBreastCancerModel(num_numerical_features, num_categorical_features)
-
-# Define loss function and optimizer
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-
-# Training loop
-num_epochs = 10
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
-model.to(device)
 
-for epoch in range(num_epochs):
-    model.train()
-    for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}"):
-        images, masks, numerical, categorical, labels = [item.to(device) for item in batch]
-        optimizer.zero_grad()
-        outputs = model(images, masks, numerical, categorical)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+# Create datasets
+train_dataset = BreastCancerDataset(train_df, transform=train_transform, mask_transform=mask_transform)
+val_dataset = BreastCancerDataset(val_df, transform=val_transform, mask_transform=mask_transform)
+from torch.utils.data import DataLoader, WeightedRandomSampler
+# Compute class weights for balanced sampling
+class_weights = compute_class_weight('balanced', classes=np.unique(train_dataset.labels),
+                                     y=train_dataset.labels.numpy())
+sample_weights = [class_weights[t] for t in train_dataset.labels.numpy()]
+sampler = WeightedRandomSampler(sample_weights, len(sample_weights))
 
-    # Validation
-    model.eval()
-    val_loss = 0
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        for batch in val_loader:
+# Create data loaders
+train_loader = DataLoader(train_dataset, batch_size=32, sampler=sampler)
+val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+
+class MultimodalBreastCancerModel(nn.Module):
+    def __init__(self, num_numerical_features, num_categorical_features):
+        super(MultimodalBreastCancerModel, self).__init__()
+
+        # Image processing
+        self.resnet = models.resnet18(pretrained=True)
+        self.resnet.fc = nn.Identity()
+
+        # Mask processing
+        self.mask_conv = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm2d(32),
+            nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm2d(64),
+            nn.AdaptiveAvgPool2d((1, 1))
+        )
+
+        # Numerical features processing
+        self.numerical_fc = nn.Sequential(
+            nn.Linear(num_numerical_features, 32),
+            nn.ReLU(),
+            nn.BatchNorm1d(32),
+            nn.Dropout(0.3)
+        )
+
+        # Categorical features processing
+        self.categorical_fc = nn.Sequential(
+            nn.Linear(num_categorical_features, 64),
+            nn.ReLU(),
+            nn.BatchNorm1d(64),
+            nn.Dropout(0.3)
+        )
+
+        # Combine all features
+        combined_features = 512 + 64 + 32 + 64  # ResNet18 output + mask output + numerical + categorical
+        self.classifier = nn.Sequential(
+            nn.Linear(combined_features, 256),
+            nn.ReLU(),
+            nn.BatchNorm1d(256),
+            nn.Dropout(0.5),
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.BatchNorm1d(64),
+            nn.Dropout(0.3),
+            nn.Linear(64, 2)  # Binary classification
+        )
+
+    def forward(self, image, mask, numerical, categorical):
+        image_features = self.resnet(image)
+        mask_features = self.mask_conv(mask).view(mask.size(0), -1)
+        numerical_features = self.numerical_fc(numerical)
+        categorical_features = self.categorical_fc(categorical)
+
+        combined = torch.cat((image_features, mask_features, numerical_features, categorical_features), dim=1)
+        output = self.classifier(combined)
+        return output
+
+from torch.nn.utils import clip_grad_norm_
+
+# Training function
+def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs, device):
+    best_val_accuracy = 0
+
+    for epoch in range(num_epochs):
+        model.train()
+        train_loss = 0
+        correct = 0
+        total = 0
+
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
             images, masks, numerical, categorical, labels = [item.to(device) for item in batch]
+
+            optimizer.zero_grad()
             outputs = model(images, masks, numerical, categorical)
-            val_loss += criterion(outputs, labels).item()
+            loss = criterion(outputs, labels)
+            loss.backward()
+
+            # Gradient clipping
+            clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+            optimizer.step()
+
+            train_loss += loss.item()
             _, predicted = outputs.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
 
-    print(f"Epoch {epoch + 1}/{num_epochs}, "
-          f"Train Loss: {loss.item():.4f}, "
-          f"Val Loss: {val_loss / len(val_loader):.4f}, "
-          f"Val Accuracy: {100. * correct / total:.2f}%")
+        train_accuracy = 100. * correct / total
 
-# Save the model
-torch.save(model.state_dict(), 'multimodal_breast_cancer_model.pth')
+        # Validation
+        model.eval()
+        val_loss = 0
+        correct = 0
+        total = 0
+
+        with torch.no_grad():
+            for batch in tqdm(val_loader, desc="Evaluating"):
+                images, masks, numerical, categorical, labels = [item.to(device) for item in batch]
+                outputs = model(images, masks, numerical, categorical)
+                loss = criterion(outputs, labels)
+
+                val_loss += loss.item()
+                _, predicted = outputs.max(1)
+                total += labels.size(0)
+                correct += predicted.eq(labels).sum().item()
+
+        val_accuracy = 100. * correct / total
+
+        print(f'Epoch [{epoch + 1}/{num_epochs}], Train Loss: {train_loss:.4f}, Train Acc: {train_accuracy:.2f}%, '
+              f'Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}%')
+
+        scheduler.step(val_loss)
+
+        # Save the best model
+        if val_accuracy > best_val_accuracy:
+            best_val_accuracy = val_accuracy
+            torch.save(model.state_dict(), 'best_multimodal_breast_cancer_model.pth')
+
+    print(f'Best validation accuracy: {best_val_accuracy:.2f}%')
+    return model
+
+# Usage example
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+num_numerical_features = train_dataset.numerical_features.shape[1]
+num_categorical_features = train_dataset.categorical_features.shape[1]
+
+model = MultimodalBreastCancerModel(num_numerical_features, num_categorical_features).to(device)
+criterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.AdamW(model.parameters(), lr=0.0001, weight_decay=1e-4)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True)
+
+# Assuming you have already created train_loader and val_loader
+num_epochs = 5
+trained_model = train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs, device)
