@@ -33,11 +33,10 @@ from data_verification import (verify_data_linkage, verify_dataset_integrity,
 from models import ViTGNNHybrid, SimpleCNN, TransferLearningModel
 import torchvision.models as models
 import multiprocessing
-# Suppress all warnings globally
-warnings.filterwarnings("ignore")
 # Check torch version and if a GPU is available on the device
 from torch.utils.data import DataLoader, random_split
-
+# Suppress all warnings globally
+warnings.filterwarnings("ignore")
 
 class BreastCancerDataset(Dataset):
     def __init__(self, dataframe, transform=None, mask_transform=None):
@@ -150,51 +149,48 @@ class BreastCancerDataset(Dataset):
         return image, mask, numerical, categorical, label
 
 # Define the model
-class BreastCancerModel(nn.Module):
+class MultimodalModel(nn.Module):
     def __init__(self, num_numerical_features, num_categorical_features):
-        super(BreastCancerModel, self).__init__()
+        super(MultimodalModel, self).__init__()
         self.resnet = models.resnet50(pretrained=True)
 
-        # Freeze the parameters
+        # Freeze ResNet parameters
         for param in self.resnet.parameters():
             param.requires_grad = False
 
-        # Replace the last fully connected layer
         num_ftrs = self.resnet.fc.in_features
         self.resnet.fc = nn.Identity()
 
-        # Additional layers for mask
+        # Mask feature extractor
         self.mask_conv = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.mask_bn = nn.BatchNorm2d(64)
         self.mask_relu = nn.ReLU(inplace=True)
         self.mask_maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.mask_layers = nn.Sequential(
+            self.mask_conv, self.mask_bn, self.mask_relu, self.mask_maxpool,
+            self.resnet.layer1, self.resnet.layer2, self.resnet.layer3, self.resnet.layer4,
+            nn.AdaptiveAvgPool2d((1, 1))
+        )
+
+        # Numerical and categorical feature processors
+        self.num_dense = nn.Linear(num_numerical_features, 128)
+        self.cat_dense = nn.Linear(num_categorical_features, 128)
 
         # Fully connected layers
-        self.fc1 = nn.Linear(num_ftrs * 2 + num_numerical_features + num_categorical_features, 512)
+        self.fc1 = nn.Linear(num_ftrs * 2 + 128 + 128, 512)  # Updated to match combined features size
         self.fc2 = nn.Linear(512, 256)
-        self.fc3 = nn.Linear(256, 2)  # 2 classes: benign and malignant
+        self.fc3 = nn.Linear(256, 2)
 
         self.dropout = nn.Dropout(0.5)
         self.relu = nn.ReLU()
 
     def forward(self, image, mask, numerical, categorical):
-        x = self.resnet(image)
+        x_img = self.resnet(image)
+        x_mask = self.mask_layers(mask).view(mask.size(0), -1)
+        x_num = self.relu(self.num_dense(numerical))
+        x_cat = self.relu(self.cat_dense(categorical))
 
-        # Process mask
-        mask = self.mask_conv(mask)
-        mask = self.mask_bn(mask)
-        mask = self.mask_relu(mask)
-        mask = self.mask_maxpool(mask)
-        mask = self.resnet.layer1(mask)
-        mask = self.resnet.layer2(mask)
-        mask = self.resnet.layer3(mask)
-        mask = self.resnet.layer4(mask)
-        mask = self.resnet.avgpool(mask)
-        mask = torch.flatten(mask, 1)
-
-        # Concatenate image features, mask features, numerical, and categorical data
-        combined = torch.cat((x, mask, numerical, categorical), dim=1)
-
+        combined = torch.cat((x_img, x_mask, x_num, x_cat), dim=1)
         x = self.relu(self.fc1(combined))
         x = self.dropout(x)
         x = self.relu(self.fc2(x))
@@ -203,75 +199,66 @@ class BreastCancerModel(nn.Module):
 
         return x
 
-# Training function
-# Updated training function with tqdm
-def train(model, train_loader, criterion, optimizer, device):
+# Training Function
+def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs):
     model.train()
     running_loss = 0.0
     correct = 0
     total = 0
 
-    # Use tqdm for the batch loop
-    pbar = tqdm(train_loader, desc='Training', leave=False)
-    for images, masks, numericals, categoricals, labels in pbar:
-        images, masks, numericals, categoricals, labels = images.to(device), masks.to(device), numericals.to(
-            device), categoricals.to(device), labels.to(device)
+    with tqdm(total=len(train_loader), desc=f"Epoch {epoch + 1}/{num_epochs} - Training", leave=False) as pbar:
+        for inputs, masks, numerical, categorical, labels in train_loader:
+            inputs, masks, numerical, categorical, labels = inputs.to(device), masks.to(device), numerical.to(device), categorical.to(device), labels.to(device)
 
-        optimizer.zero_grad()
-        outputs = model(images, masks, numericals, categoricals)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+            optimizer.zero_grad()
 
-        running_loss += loss.item()
-        _, predicted = outputs.max(1)
-        total += labels.size(0)
-        correct += predicted.eq(labels).sum().item()
+            outputs = model(inputs, masks, numerical, categorical)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
 
-        # Update progress bar
-        pbar.set_postfix({'loss': loss.item(), 'acc': correct / total})
+            running_loss += loss.item()
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+            pbar.update(1)
 
     epoch_loss = running_loss / len(train_loader)
     epoch_acc = correct / total
     return epoch_loss, epoch_acc
 
-
-# Updated validation function with tqdm
-def validate(model, val_loader, criterion, device):
+# Validation function
+def validate(model, val_loader, criterion, device, epoch, num_epochs):
     model.eval()
     running_loss = 0.0
     correct = 0
     total = 0
 
-    # Use tqdm for the batch loop
-    pbar = tqdm(val_loader, desc='Validating', leave=False)
     with torch.no_grad():
-        for images, masks, numericals, categoricals, labels in pbar:
-            images, masks, numericals, categoricals, labels = images.to(device), masks.to(device), numericals.to(
-                device), categoricals.to(device), labels.to(device)
+        with tqdm(total=len(val_loader), desc=f"Epoch {epoch + 1}/{num_epochs} - Validation", leave=False) as pbar:
+            for inputs, masks, numerical, categorical, labels in val_loader:
+                inputs, masks, numerical, categorical, labels = inputs.to(device), masks.to(device), numerical.to(device), categorical.to(device), labels.to(device)
 
-            outputs = model(images, masks, numericals, categoricals)
-            loss = criterion(outputs, labels)
+                outputs = model(inputs, masks, numerical, categorical)
+                loss = criterion(outputs, labels)
 
-            running_loss += loss.item()
-            _, predicted = outputs.max(1)
-            total += labels.size(0)
-            correct += predicted.eq(labels).sum().item()
+                running_loss += loss.item()
+                _, predicted = torch.max(outputs, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
 
-            # Update progress bar
-            pbar.set_postfix({'loss': loss.item(), 'acc': correct / total})
+                pbar.update(1)
 
     epoch_loss = running_loss / len(val_loader)
     epoch_acc = correct / total
     return epoch_loss, epoch_acc
-
 
 # Training loop
 def main():
     # Set up multiprocessing
     if __name__ == '__main__':
         multiprocessing.set_start_method('spawn', force=True)
-
     """
     For the mammograms we're using the CBIS-DDSM dataset from Kaggle: https://www.kaggle.com/datasets/awsaf49/cbis-ddsm-breast-cancer-image-dataset/data
     """
@@ -509,42 +496,35 @@ def main():
 
     # Create dataloaders
     batch_size = 32
-    num_workers = min(os.cpu_count(), 4)  # Use at most 4 workers
+    num_workers = min(os.cpu_count(), 6)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = BreastCancerModel(num_numerical_features, num_categorical_features).to(device)
+    model = MultimodalModel(num_numerical_features, num_categorical_features).to(device)
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True)
 
-    num_epochs = 5
+    num_epochs = 10
     best_val_loss = float('inf')
 
-    for epoch in trange(num_epochs, desc='Epochs'):
-        train_loss, train_acc = train(model, train_loader, criterion, optimizer, device)
-        val_loss, val_acc = validate(model, val_loader, criterion, device)
+    for epoch in range(num_epochs):
+        train_loss, train_acc = train(model, train_loader, criterion, optimizer, device, epoch, num_epochs)
+        val_loss, val_acc = validate(model, val_loader, criterion, device, epoch, num_epochs)
 
         scheduler.step(val_loss)
 
-        tqdm.write(f"Epoch {epoch + 1}/{num_epochs}")
-        tqdm.write(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
-        tqdm.write(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+        print(f"Epoch [{epoch + 1}/{num_epochs}]")
+        print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
+        print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            torch.save(model.state_dict(), 'best_model.pth')
-            tqdm.write("Saved best model")
-
-        tqdm.write("")
-
-    # Load best model and evaluate on test set
+    """# Load best model and evaluate on test set
     model.load_state_dict(torch.load('best_model.pth'))
     test_loss, test_acc = validate(model, test_loader, criterion, device)
-    print(f"Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.4f}")
+    print(f"Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.4f}")"""
 
 if __name__ == '__main__':
     main()
