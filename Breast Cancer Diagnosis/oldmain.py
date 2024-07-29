@@ -33,11 +33,12 @@ from data_verification import (verify_data_linkage, verify_dataset_integrity,
 from models import ViTGNNHybrid, SimpleCNN, TransferLearningModel
 import torchvision.models as models
 import multiprocessing
+# Suppress the specific torchvision warning
+warnings.filterwarnings("ignore", message="Failed to load image Python extension")
 # Check torch version and if a GPU is available on the device
 from torch.utils.data import DataLoader, random_split
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
-
 class BreastCancerDataset(Dataset):
     def __init__(self, dataframe, transform=None, mask_transform=None):
         self.data = dataframe
@@ -259,6 +260,7 @@ def main():
     # Set up multiprocessing
     if __name__ == '__main__':
         multiprocessing.set_start_method('spawn', force=True)
+
     """
     For the mammograms we're using the CBIS-DDSM dataset from Kaggle: https://www.kaggle.com/datasets/awsaf49/cbis-ddsm-breast-cancer-image-dataset/data
     """
