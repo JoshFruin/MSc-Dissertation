@@ -40,9 +40,9 @@ from torch.utils.data import DataLoader, random_split
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
 class BreastCancerDataset(Dataset):
-    def __init__(self, dataframe, transform=None, mask_transform=None):
+    def __init__(self, dataframe, image_transform=None, mask_transform=None):
         self.data = dataframe
-        self.transform = transform
+        self.image_transform = image_transform
         self.mask_transform = mask_transform
 
         # Filter out rows with missing masks
@@ -128,14 +128,14 @@ class BreastCancerDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        img_name = self.data.iloc[idx]['image_file_path']  # Full mammogram image
-        mask_name = self.data.iloc[idx]['ROI_mask_file_path']  # ROI mask
+        img_name = self.data.iloc[idx]['image_file_path']
+        mask_name = self.data.iloc[idx]['ROI_mask_file_path']
 
         image = Image.open(img_name).convert("RGB")
-        mask = Image.open(mask_name).convert("RGB")  # Convert mask to RGB
+        mask = Image.open(mask_name).convert("RGB")
 
-        if self.transform is not None:
-            image = self.transform(image)
+        if self.image_transform is not None:
+            image = self.image_transform(image)
         if self.mask_transform is not None:
             mask = self.mask_transform(mask)
 
@@ -148,6 +148,9 @@ class BreastCancerDataset(Dataset):
         categorical = torch.tensor(self.categorical_features.iloc[idx].values, dtype=torch.float)
 
         return image, mask, numerical, categorical, label
+
+    def get_feature_dimensions(self):
+        return self.numerical_features.shape[1], self.categorical_features.shape[1]
 
 # Define the model
 class MultimodalModel(nn.Module):
@@ -178,7 +181,7 @@ class MultimodalModel(nn.Module):
         self.cat_dense = nn.Linear(num_categorical_features, 128)
 
         # Fully connected layers
-        self.fc1 = nn.Linear(num_ftrs * 2 + 128 + 128, 512)  # Updated to match combined features size
+        self.fc1 = nn.Linear(num_ftrs * 2 + 128 + 128, 512)
         self.fc2 = nn.Linear(512, 256)
         self.fc3 = nn.Linear(256, 2)
 
@@ -482,36 +485,72 @@ def main():
         transforms.Resize((224, 224)),
         transforms.ToTensor()
     ])
+    train_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(10),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
 
-    # Create datasets
-    full_train_dataset = BreastCancerDataset(mam_train_data, transform=transform, mask_transform=mask_transform)
-    test_dataset = BreastCancerDataset(mam_test_data, transform=transform, mask_transform=mask_transform)
+    train_mask_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(10),
+        transforms.ToTensor()
+    ])
 
-    # Get the sizes of numerical and categorical features
-    num_numerical_features = full_train_dataset.numerical_features.shape[1]
-    num_categorical_features = full_train_dataset.categorical_features.shape[1]
+    # Define transforms for validation and testing
+    val_test_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    val_test_mask_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor()
+    ])
+
+    # Create datasets with appropriate transforms
+    train_dataset = BreastCancerDataset(mam_train_data, image_transform=train_transform,
+                                        mask_transform=train_mask_transform)
+    val_dataset = BreastCancerDataset(mam_train_data, image_transform=val_test_transform,
+                                      mask_transform=val_test_mask_transform)
+    test_dataset = BreastCancerDataset(mam_test_data, image_transform=val_test_transform,
+                                       mask_transform=val_test_mask_transform)
+
+    # Get the number of numerical and categorical features
+    num_numerical_features, num_categorical_features = train_dataset.get_feature_dimensions()
 
     # Split train dataset into train and validation
-    train_size = int(0.8 * len(full_train_dataset))
-    val_size = len(full_train_dataset) - train_size
-    train_dataset, val_dataset = random_split(full_train_dataset, [train_size, val_size])
+    train_size = int(0.8 * len(train_dataset))
+    val_size = len(train_dataset) - train_size
+    train_dataset, _ = random_split(train_dataset, [train_size, val_size])
+    _, val_dataset = random_split(val_dataset, [train_size, val_size])
 
     # Create dataloaders
     batch_size = 32
     num_workers = min(os.cpu_count(), 6)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers,
+                              pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers,
+                             pin_memory=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MultimodalModel(num_numerical_features, num_categorical_features).to(device)
 
+    patience = 5
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=patience, verbose=True)
 
     num_epochs = 10
+
     best_val_loss = float('inf')
+    no_improve = 0
 
     for epoch in range(num_epochs):
         train_loss, train_acc = train(model, train_loader, criterion, optimizer, device, epoch, num_epochs)
@@ -522,6 +561,17 @@ def main():
         print(f"Epoch [{epoch + 1}/{num_epochs}]")
         print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
         print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            no_improve = 0
+            torch.save(model.state_dict(), 'best_model.pth')
+        else:
+            no_improve += 1
+
+        if no_improve == patience:
+            print("Early stopping!")
+            break
 
     """# Load best model and evaluate on test set
     model.load_state_dict(torch.load('best_model.pth'))
