@@ -153,15 +153,29 @@ class BreastCancerDataset(Dataset):
         return self.numerical_features.shape[1], self.categorical_features.shape[1]
 
 # Define the model
-class MultimodalModel(nn.Module):
-    def __init__(self, num_numerical_features, num_categorical_features):
-        super(MultimodalModel, self).__init__()
-        self.resnet = models.resnet50(pretrained=True)
+class AttentionBlock(nn.Module):
+    def __init__(self, in_features):
+        super().__init__()
+        self.attention = nn.Sequential(
+            nn.Linear(in_features, in_features // 2),
+            nn.ReLU(),
+            nn.Linear(in_features // 2, in_features),
+            nn.Sigmoid()
+        )
 
-        # Freeze ResNet parameters
+    def forward(self, x):
+        attention_weights = self.attention(x)
+        return x * attention_weights
+
+
+class MultimodalModel(nn.Module):
+    def __init__(self, num_numerical_features, num_categorical_features, dropout_rate=0.5):
+        super(MultimodalModel, self).__init__()
+
+        # Image feature extractor (ResNet50)
+        self.resnet = models.resnet50(pretrained=True)
         for param in self.resnet.parameters():
             param.requires_grad = False
-
         num_ftrs = self.resnet.fc.in_features
         self.resnet.fc = nn.Identity()
 
@@ -180,13 +194,18 @@ class MultimodalModel(nn.Module):
         self.num_dense = nn.Linear(num_numerical_features, 128)
         self.cat_dense = nn.Linear(num_categorical_features, 128)
 
+        # Attention mechanism
+        self.attention = AttentionBlock(num_ftrs * 2 + 128 + 128)
+
         # Fully connected layers
         self.fc1 = nn.Linear(num_ftrs * 2 + 128 + 128, 512)
         self.fc2 = nn.Linear(512, 256)
         self.fc3 = nn.Linear(256, 2)
 
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(dropout_rate)
         self.relu = nn.ReLU()
+        self.bn1 = nn.BatchNorm1d(512)
+        self.bn2 = nn.BatchNorm1d(256)
 
     def forward(self, image, mask, numerical, categorical):
         x_img = self.resnet(image)
@@ -195,9 +214,13 @@ class MultimodalModel(nn.Module):
         x_cat = self.relu(self.cat_dense(categorical))
 
         combined = torch.cat((x_img, x_mask, x_num, x_cat), dim=1)
-        x = self.relu(self.fc1(combined))
+
+        # Apply attention
+        combined = self.attention(combined)
+
+        x = self.relu(self.bn1(self.fc1(combined)))
         x = self.dropout(x)
-        x = self.relu(self.fc2(x))
+        x = self.relu(self.bn2(self.fc2(x)))
         x = self.dropout(x)
         x = self.fc3(x)
 
@@ -540,6 +563,7 @@ def main():
                              pin_memory=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(device)
     model = MultimodalModel(num_numerical_features, num_categorical_features).to(device)
 
     patience = 5
