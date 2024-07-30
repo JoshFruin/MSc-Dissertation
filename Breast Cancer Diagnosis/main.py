@@ -41,14 +41,18 @@ from utils import FocalLoss
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
 
+def get_combined_categorical_columns(train_df, val_df, test_df, categorical_columns):
+    combined_df = pd.concat([train_df[categorical_columns], val_df[categorical_columns], test_df[categorical_columns]], axis=0)
+    combined_dummies = pd.get_dummies(combined_df, columns=categorical_columns, dummy_na=True)
+    return combined_dummies.columns.tolist()
 
 class BreastCancerDataset(Dataset):
-    def __init__(self, dataframe, transform=None, train=True, categorical_columns=None):
+    def __init__(self, dataframe, transform=None, categorical_columns=None, all_categorical_columns=None):
         self.data = dataframe
         self.transform = transform
-        self.train = train
         self.categorical_columns = categorical_columns or ['calc_type', 'calc_distribution', 'left_or_right_breast',
                                                            'abnormality_type', 'mass_shape', 'mass_margins']
+        self.all_categorical_columns = all_categorical_columns
 
         # Filter out rows with missing masks
         self.data = self.data.dropna(subset=['ROI_mask_file_path'])
@@ -60,8 +64,15 @@ class BreastCancerDataset(Dataset):
         self.numerical_features = self.data[['subtlety', 'breast_density']].fillna(0)
 
         # Process categorical features
-        self.categorical_features = pd.get_dummies(self.data[self.categorical_columns],
-                                                   columns=self.categorical_columns, dummy_na=True)
+        self.categorical_features = pd.get_dummies(self.data[self.categorical_columns], columns=self.categorical_columns, dummy_na=True)
+
+        # Ensure all categorical features are present in the dataframe
+        for col in self.all_categorical_columns:
+            if col not in self.categorical_features:
+                self.categorical_features[col] = 0
+
+        # Reorder columns to match the combined dummies columns
+        self.categorical_features = self.categorical_features[self.all_categorical_columns]
 
         # Ensure all categorical features are float
         self.categorical_features = self.categorical_features.astype(float)
@@ -89,13 +100,19 @@ class BreastCancerDataset(Dataset):
 
         return image, mask, numerical, categorical, label
 
-    @classmethod
-    def get_feature_dimensions(cls, train_df, test_df, categorical_columns=None):
+    def get_num_features(self):
+        num_numerical_features = self.numerical_features.shape[1]
+        num_categorical_features = self.categorical_features.shape[1]
+        return num_numerical_features, num_categorical_features
+
+
+    @staticmethod
+    def get_feature_dimensions(train_df, val_df, test_df, categorical_columns=None):
         categorical_columns = categorical_columns or ['calc_type', 'calc_distribution', 'left_or_right_breast',
                                                       'abnormality_type', 'mass_shape', 'mass_margins']
 
-        # Combine train and test data for categorical encoding
-        combined_df = pd.concat([train_df[categorical_columns], test_df[categorical_columns]], axis=0)
+        # Combine train, validation, and test data for categorical encoding
+        combined_df = pd.concat([train_df[categorical_columns], val_df[categorical_columns], test_df[categorical_columns]], axis=0)
 
         # Get dummies for all possible categories
         all_categories = pd.get_dummies(combined_df, columns=categorical_columns, dummy_na=True)
@@ -103,10 +120,9 @@ class BreastCancerDataset(Dataset):
         num_numerical_features = 2  # subtlety and breast_density
         num_categorical_features = all_categories.shape[1]
 
-        print(f"Number of categorical features after combining train and test: {num_categorical_features}")
+        print(f"Number of categorical features after combining train, validation, and test: {num_categorical_features}")
 
         return num_numerical_features, num_categorical_features, all_categories.columns.tolist()
-
 
     def process_breast_density(self):
         if 'breast_density' in self.data.columns:
@@ -432,45 +448,30 @@ def main():
     print("\nValue counts for 'pathology' in train data:")
     print(mam_train_data['pathology'].value_counts(normalize=True))
 
+    # Split the combined training data into train and validation sets
+    mam_train_data, mam_val_data = train_test_split(mam_train_data, test_size=0.2, random_state=42,
+                                            stratify=mam_train_data['pathology'])
+
     # Define transforms
     train_transform = AlignedTransform(size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=10)
     val_test_transform = AlignedTransform(size=(224, 224), flip_prob=0, rotate_prob=0)
 
-    # Get feature dimensions and all possible categories
-    num_numerical_features, num_categorical_features, all_categories = BreastCancerDataset.get_feature_dimensions(
-        mam_train_data, mam_test_data)
+    # Assuming you have three DataFrames: train_df, val_df, and test_df for your datasets
+    num_numerical_features, num_categorical_features, categorical_feature_columns = BreastCancerDataset.get_feature_dimensions(
+        mam_train_data, mam_val_data, mam_test_data)
 
-    # Create datasets with appropriate transforms
-    train_dataset = BreastCancerDataset(mam_train_data, transform=train_transform, train=True)
-    val_dataset = BreastCancerDataset(mam_train_data, transform=val_test_transform, train=False)
-    test_dataset = BreastCancerDataset(mam_test_data, transform=val_test_transform, train=False)
+    # Assuming you have three DataFrames: train_df, val_df, and test_df for your datasets
+    categorical_columns = ['calc_type', 'calc_distribution', 'left_or_right_breast', 'abnormality_type', 'mass_shape',
+                           'mass_margins']
+    all_categorical_columns = get_combined_categorical_columns(mam_train_data, mam_val_data, mam_test_data,
+                                                               categorical_columns)
 
-    # Pad categorical features for all datasets
-    for dataset in [train_dataset, val_dataset, test_dataset]:
-        for cat in all_categories:
-            if cat not in dataset.categorical_features.columns:
-                dataset.categorical_features[cat] = 0
-        print(f"Shape of categorical features after padding: {dataset.categorical_features.shape}")
+    print(f"Number of categorical features: {len(all_categorical_columns)}")
 
-    # Verify that the number of categorical features is consistent
-    assert train_dataset.categorical_features.shape[1] == val_dataset.categorical_features.shape[1] == \
-           test_dataset.categorical_features.shape[1], \
-        "Mismatch in number of categorical features between datasets"
-
-    # Pad categorical features for all datasets
-    for dataset in [train_dataset, val_dataset, test_dataset]:
-        for cat in all_categories:
-            if cat not in dataset.categorical_features.columns:
-                dataset.categorical_features[cat] = 0
-        dataset.categorical_features = dataset.categorical_features.astype(float)
-        print(f"Shape of categorical features after padding: {dataset.categorical_features.shape}")
-        print(f"Categorical feature dtypes: {dataset.categorical_features.dtypes.value_counts()}")
-
-    # Split train dataset into train and validation
-    train_size = int(0.8 * len(train_dataset))
-    val_size = len(train_dataset) - train_size
-    train_dataset, _ = random_split(train_dataset, [train_size, val_size])
-    _, val_dataset = random_split(val_dataset, [train_size, val_size])
+    # Now you can initialize your datasets
+    train_dataset = BreastCancerDataset(mam_train_data, transform=train_transform, categorical_columns=categorical_columns, all_categorical_columns=all_categorical_columns)
+    val_dataset = BreastCancerDataset(mam_val_data, transform=val_test_transform, categorical_columns=categorical_columns, all_categorical_columns=all_categorical_columns)
+    test_dataset = BreastCancerDataset(mam_test_data, transform=val_test_transform, categorical_columns=categorical_columns, all_categorical_columns=all_categorical_columns)
 
     # Create dataloaders
     batch_size = 32
@@ -488,10 +489,10 @@ def main():
     patience = 5
     #criterion = nn.CrossEntropyLoss()
     criterion = FocalLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=patience, verbose=True)
 
-    num_epochs = 10
+    num_epochs = 5
 
     best_val_loss = float('inf')
     no_improve = 0
