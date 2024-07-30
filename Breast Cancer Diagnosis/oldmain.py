@@ -19,7 +19,6 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm, trange  # Import tqdm for progress bars
 from data_visualisations import visualise_data, dataloader_visualisations
-from torch_geometric.data import Data, Batch
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
@@ -30,7 +29,7 @@ from data_verification import (verify_data_linkage, verify_dataset_integrity,
                                check_label_consistency, visualize_augmented_samples,
                                verify_data_loading, verify_label_distribution,
                                verify_image_mask_correspondence, verify_batch, verify_labels) #check_data_range,
-from models import ViTGNNHybrid, SimpleCNN, TransferLearningModel
+from models import SimpleCNN, TransferLearningModel
 import torchvision.models as models
 import multiprocessing
 # Suppress the specific torchvision warning
@@ -167,64 +166,94 @@ class AttentionBlock(nn.Module):
         attention_weights = self.attention(x)
         return x * attention_weights
 
-
+from torch.nn.functional import relu
 class MultimodalModel(nn.Module):
     def __init__(self, num_numerical_features, num_categorical_features, dropout_rate=0.5):
         super(MultimodalModel, self).__init__()
 
-        # Image feature extractor (ResNet50)
-        self.resnet = models.resnet50(pretrained=True)
-        for param in self.resnet.parameters():
-            param.requires_grad = False
-        num_ftrs = self.resnet.fc.in_features
-        self.resnet.fc = nn.Identity()
+        # Image feature extractor (EfficientNet-B0)
+        self.efficientnet = models.efficientnet_b0(pretrained=True)
+        self.unfreeze_last_n_layers(self.efficientnet, 20)  # Unfreeze last 20 layers
+        num_ftrs = self.efficientnet.classifier[1].in_features
+        self.efficientnet.classifier = nn.Identity()
 
         # Mask feature extractor
-        self.mask_conv = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.mask_bn = nn.BatchNorm2d(64)
-        self.mask_relu = nn.ReLU(inplace=True)
-        self.mask_maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.mask_conv = nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1, bias=False)
+        self.mask_bn = nn.BatchNorm2d(32)
         self.mask_layers = nn.Sequential(
-            self.mask_conv, self.mask_bn, self.mask_relu, self.mask_maxpool,
-            self.resnet.layer1, self.resnet.layer2, self.resnet.layer3, self.resnet.layer4,
+            self.mask_conv, self.mask_bn, nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool2d((1, 1))
         )
 
         # Numerical and categorical feature processors
-        self.num_dense = nn.Linear(num_numerical_features, 128)
-        self.cat_dense = nn.Linear(num_categorical_features, 128)
+        self.num_dense = nn.Sequential(
+            nn.Linear(num_numerical_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64)
+        )
+        self.cat_dense = nn.Sequential(
+            nn.Linear(num_categorical_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64)
+        )
 
         # Attention mechanism
-        self.attention = AttentionBlock(num_ftrs * 2 + 128 + 128)
+        self.attention = AttentionBlock(num_ftrs + 32 + 64 + 64)
 
         # Fully connected layers
-        self.fc1 = nn.Linear(num_ftrs * 2 + 128 + 128, 512)
+        self.fc1 = nn.Linear(num_ftrs + 32 + 64 + 64, 512)
         self.fc2 = nn.Linear(512, 256)
         self.fc3 = nn.Linear(256, 2)
 
         self.dropout = nn.Dropout(dropout_rate)
-        self.relu = nn.ReLU()
         self.bn1 = nn.BatchNorm1d(512)
         self.bn2 = nn.BatchNorm1d(256)
 
+    def unfreeze_last_n_layers(self, model, n):
+        params = list(model.parameters())
+        for param in params[:-n]:
+            param.requires_grad = False
+        for param in params[-n:]:
+            param.requires_grad = True
+
     def forward(self, image, mask, numerical, categorical):
-        x_img = self.resnet(image)
+        x_img = self.efficientnet(image)
         x_mask = self.mask_layers(mask).view(mask.size(0), -1)
-        x_num = self.relu(self.num_dense(numerical))
-        x_cat = self.relu(self.cat_dense(categorical))
+        x_num = self.num_dense(numerical)
+        x_cat = self.cat_dense(categorical)
 
         combined = torch.cat((x_img, x_mask, x_num, x_cat), dim=1)
 
         # Apply attention
         combined = self.attention(combined)
 
-        x = self.relu(self.bn1(self.fc1(combined)))
+        x = relu(self.bn1(self.fc1(combined)))
         x = self.dropout(x)
-        x = self.relu(self.bn2(self.fc2(x)))
+        x = relu(self.bn2(self.fc2(x)))
         x = self.dropout(x)
         x = self.fc3(x)
 
         return x
+
+# Focal Loss
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=1, gamma=2, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        ce_loss = nn.functional.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
 
 # Training Function
 def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs):

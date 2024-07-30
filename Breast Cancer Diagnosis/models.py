@@ -2,100 +2,90 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
-from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
-from torch_geometric.data import Data, Batch
-import torchvision.models as models
-from torch_geometric.utils import grid, add_self_loops
-from transformers import ViTModel, ViTConfig
-from torch_geometric.data import Data as GeometricData
+from torch.nn.functional import relu
 
-
-class MultimodalBreastCancerModel(nn.Module):
-    def __init__(self, num_tabular_features):
-        super(MultimodalBreastCancerModel, self).__init__()
-
-        # Image feature extractor (using a pre-trained ResNet)
-        self.image_model = models.resnet50(pretrained=True)
-        self.image_model.fc = nn.Identity()  # Remove the last fully connected layer
-
-        # Tabular data processing
-        self.tabular_model = nn.Sequential(
-            nn.Linear(num_tabular_features, 64),
+# Define the model
+class AttentionBlock(nn.Module):
+    def __init__(self, in_features):
+        super().__init__()
+        self.attention = nn.Sequential(
+            nn.Linear(in_features, in_features // 2),
             nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU()
+            nn.Linear(in_features // 2, in_features),
+            nn.Sigmoid()
         )
 
-        # Combine image and tabular features
-        self.combined_layer = nn.Sequential(
-            nn.Linear(2048 + 32, 512),  # 2048 from ResNet, 32 from tabular data
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 2)  # 2 output classes: benign and malignant
+    def forward(self, x):
+        attention_weights = self.attention(x)
+        return x * attention_weights
+
+class MultimodalModel(nn.Module):
+    def __init__(self, num_numerical_features, num_categorical_features, dropout_rate=0.5):
+        super(MultimodalModel, self).__init__()
+
+        # Image feature extractor (EfficientNet-B0)
+        self.efficientnet = models.efficientnet_b0(pretrained=True)
+        self.unfreeze_last_n_layers(self.efficientnet, 20)  # Unfreeze last 20 layers
+        num_ftrs = self.efficientnet.classifier[1].in_features
+        self.efficientnet.classifier = nn.Identity()
+
+        # Mask feature extractor
+        self.mask_conv = nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1, bias=False)
+        self.mask_bn = nn.BatchNorm2d(32)
+        self.mask_layers = nn.Sequential(
+            self.mask_conv, self.mask_bn, nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1))
         )
 
-    def forward(self, image, tabular_data):
-        image_features = self.image_model(image)
-        tabular_features = self.tabular_model(tabular_data)
-        combined_features = torch.cat((image_features, tabular_features), dim=1)
-        output = self.combined_layer(combined_features)
-        return output
+        # Numerical and categorical feature processors
+        self.num_dense = nn.Sequential(
+            nn.Linear(num_numerical_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64)
+        )
+        self.cat_dense = nn.Sequential(
+            nn.Linear(num_categorical_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64)
+        )
 
-class ViTGNNHybrid(nn.Module):
-    def __init__(self, num_classes=2, dropout_rate=0.3):
-        super(ViTGNNHybrid, self).__init__()
+        # Attention mechanism
+        self.attention = AttentionBlock(num_ftrs + 32 + 64 + 64)
 
-        # Vision Transformer (ViT) part
-        self.vit = models.vit_b_16(pretrained=True)
-        self.vit.heads = nn.Identity()  # Remove the classification head
+        # Fully connected layers
+        self.fc1 = nn.Linear(num_ftrs + 32 + 64 + 64, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, 2)
 
-        # GNN part
-        self.conv1 = GCNConv(768, 256)  # 768 is the output dimension of ViT
-        self.conv2 = GCNConv(256, 128)
-
-        # Final classification layers
-        self.fc1 = nn.Linear(128, 64)
-        self.fc2 = nn.Linear(64, num_classes)
         self.dropout = nn.Dropout(dropout_rate)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.bn2 = nn.BatchNorm1d(256)
 
-    def forward(self, images, masks):
-        batch_size = images.size(0)
+    def unfreeze_last_n_layers(self, model, n):
+        params = list(model.parameters())
+        for param in params[:-n]:
+            param.requires_grad = False
+        for param in params[-n:]:
+            param.requires_grad = True
 
-        # Process images through ViT
-        vit_features = self.vit(images)  # Shape: (batch_size, 768)
+    def forward(self, image, mask, numerical, categorical):
+        x_img = self.efficientnet(image)
+        x_mask = self.mask_layers(mask).view(mask.size(0), -1)
+        x_num = self.num_dense(numerical)
+        x_cat = self.cat_dense(categorical)
 
-        # Create graph data
-        edge_index = self.get_edge_index(masks)
+        combined = torch.cat((x_img, x_mask, x_num, x_cat), dim=1)
 
-        # Create a batch of graphs
-        batch = torch.arange(batch_size).repeat_interleave(vit_features.size(1))
-        graph_data = Data(x=vit_features, edge_index=edge_index, batch=batch)
+        # Apply attention
+        combined = self.attention(combined)
 
-        # GNN layers
-        x = self.conv1(graph_data.x, graph_data.edge_index)
-        x = torch.relu(x)
-        x = self.conv2(x, graph_data.edge_index)
-        x = torch.relu(x)
-
-        # Global pooling
-        x = global_mean_pool(x, graph_data.batch)
-
-        # Final classification
-        x = self.fc1(x)
-        x = torch.relu(x)
+        x = relu(self.bn1(self.fc1(combined)))
         x = self.dropout(x)
-        x = self.fc2(x)
+        x = relu(self.bn2(self.fc2(x)))
+        x = self.dropout(x)
+        x = self.fc3(x)
 
         return x
-
-    def get_edge_index(self, masks):
-        # This function should return the edge index based on the mask
-        # For simplicity, we'll create a fully connected graph
-        # You may want to implement a more sophisticated method based on your masks
-        num_nodes = masks.size(1) * masks.size(2)
-        edge_index = torch.combinations(torch.arange(num_nodes), r=2).t().contiguous()
-        return edge_index
 
 class TransferLearningModel(nn.Module):
     def __init__(self, num_classes=2):
