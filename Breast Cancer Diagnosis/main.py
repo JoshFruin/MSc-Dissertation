@@ -40,11 +40,15 @@ from data_preparation import fix_image_paths, create_image_dict, fix_image_path_
 from utils import FocalLoss
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
+
+
 class BreastCancerDataset(Dataset):
-    def __init__(self, dataframe, transform=None, train=True):
+    def __init__(self, dataframe, transform=None, train=True, categorical_columns=None):
         self.data = dataframe
         self.transform = transform
         self.train = train
+        self.categorical_columns = categorical_columns or ['calc_type', 'calc_distribution', 'left_or_right_breast',
+                                                           'abnormality_type', 'mass_shape', 'mass_margins']
 
         # Filter out rows with missing masks
         self.data = self.data.dropna(subset=['ROI_mask_file_path'])
@@ -52,24 +56,58 @@ class BreastCancerDataset(Dataset):
         # Labels are already preprocessed to 0 and 1
         self.labels = torch.tensor(self.data['pathology'].values, dtype=torch.long)
 
-        # Process additional features (unchanged)
-        self.process_breast_density()
-        self.process_calc_type()
-        self.process_calc_distribution()
-        self.process_subtlety()
-        self.process_left_or_right()
-        self.process_abnormality_type()
-        self.process_mass_shape()
-        self.process_mass_margins()
+        # Process numerical features
+        self.numerical_features = self.data[['subtlety', 'breast_density']].fillna(0)
 
-        # Combine all numerical features
-        self.numerical_features = pd.concat([self.subtlety, self.breast_density], axis=1)
+        # Process categorical features
+        self.categorical_features = pd.get_dummies(self.data[self.categorical_columns],
+                                                   columns=self.categorical_columns, dummy_na=True)
 
-        # Combine all categorical features
-        self.categorical_features = pd.concat([
-            self.calc_type, self.calc_distribution, self.left_or_right,
-            self.abnormality_type, self.mass_shape, self.mass_margins
-        ], axis=1)
+        # Ensure all categorical features are float
+        self.categorical_features = self.categorical_features.astype(float)
+
+        print(f"Shape of categorical features: {self.categorical_features.shape}")
+        print(f"Categorical feature dtypes: {self.categorical_features.dtypes.value_counts()}")
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        img_name = self.data.iloc[idx]['image_file_path']
+        mask_name = self.data.iloc[idx]['ROI_mask_file_path']
+
+        image = Image.open(img_name).convert("RGB")
+        mask = Image.open(mask_name).convert("RGB")
+
+        if self.transform is not None:
+            image, mask = self.transform(image, mask)
+
+        label = self.labels[idx]
+
+        numerical = torch.tensor(self.numerical_features.iloc[idx].values, dtype=torch.float)
+        categorical = torch.tensor(self.categorical_features.iloc[idx].values, dtype=torch.float)
+
+        return image, mask, numerical, categorical, label
+
+    @classmethod
+    def get_feature_dimensions(cls, train_df, test_df, categorical_columns=None):
+        categorical_columns = categorical_columns or ['calc_type', 'calc_distribution', 'left_or_right_breast',
+                                                      'abnormality_type', 'mass_shape', 'mass_margins']
+
+        # Combine train and test data for categorical encoding
+        combined_df = pd.concat([train_df[categorical_columns], test_df[categorical_columns]], axis=0)
+
+        # Get dummies for all possible categories
+        all_categories = pd.get_dummies(combined_df, columns=categorical_columns, dummy_na=True)
+
+        num_numerical_features = 2  # subtlety and breast_density
+        num_categorical_features = all_categories.shape[1]
+
+        print(f"Number of categorical features after combining train and test: {num_categorical_features}")
+
+        return num_numerical_features, num_categorical_features, all_categories.columns.tolist()
+
+
     def process_breast_density(self):
         if 'breast_density' in self.data.columns:
             self.breast_density = pd.to_numeric(self.data['breast_density'], errors='coerce').fillna(0).astype(int)
@@ -123,32 +161,6 @@ class BreastCancerDataset(Dataset):
         else:
             self.mass_margins = pd.DataFrame(np.zeros((len(self.data), 1)), index=self.data.index,
                                              columns=['margins_N/A'])
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        img_name = self.data.iloc[idx]['image_file_path']
-        mask_name = self.data.iloc[idx]['ROI_mask_file_path']
-
-        image = Image.open(img_name).convert("RGB")
-        mask = Image.open(mask_name).convert("RGB")
-
-        if self.transform is not None:
-            image, mask = self.transform(image, mask)
-
-        label = self.labels[idx]
-
-        # Get numerical features
-        numerical = torch.tensor(self.numerical_features.iloc[idx].values, dtype=torch.float)
-
-        # Get categorical features
-        categorical = torch.tensor(self.categorical_features.iloc[idx].values, dtype=torch.float)
-
-        return image, mask, numerical, categorical, label
-
-    def get_feature_dimensions(self):
-        return self.numerical_features.shape[1], self.categorical_features.shape[1]
 
 # Training Function
 def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs):
@@ -205,6 +217,53 @@ def validate(model, val_loader, criterion, device, epoch, num_epochs):
     epoch_acc = correct / total
     return epoch_loss, epoch_acc
 
+
+def test_model(model, test_loader, criterion, device):
+    model.eval()
+    all_preds = []
+    all_labels = []
+    running_loss = 0.0
+
+    with torch.no_grad():
+        for inputs, masks, numerical, categorical, labels in tqdm(test_loader, desc="Testing"):
+            inputs, masks, numerical, categorical, labels = inputs.to(device), masks.to(device), numerical.to(
+                device), categorical.to(device), labels.to(device)
+
+            outputs = model(inputs, masks, numerical, categorical)
+            loss = criterion(outputs, labels)
+            running_loss += loss.item()
+
+            _, preds = torch.max(outputs, 1)
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+
+    # Calculate metrics
+    accuracy = accuracy_score(all_labels, all_preds)
+    precision = precision_score(all_labels, all_preds, average='weighted')
+    recall = recall_score(all_labels, all_preds, average='weighted')
+    f1 = f1_score(all_labels, all_preds, average='weighted')
+    auc_roc = roc_auc_score(all_labels, all_preds)
+
+    # Confusion matrix
+    cm = confusion_matrix(all_labels, all_preds)
+
+    # Print results
+    print(f"Test Loss: {running_loss / len(test_loader):.4f}")
+    print(f"Accuracy: {accuracy:.4f}")
+    print(f"Precision: {precision:.4f}")
+    print(f"Recall: {recall:.4f}")
+    print(f"F1 Score: {f1:.4f}")
+    print(f"AUC-ROC: {auc_roc:.4f}")
+
+    # Plot confusion matrix
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.title('Confusion Matrix')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    plt.show()
+
+    return accuracy, precision, recall, f1, auc_roc
 
 class AlignedTransform:
     def __init__(self, size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=10):
@@ -377,13 +436,35 @@ def main():
     train_transform = AlignedTransform(size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=10)
     val_test_transform = AlignedTransform(size=(224, 224), flip_prob=0, rotate_prob=0)
 
+    # Get feature dimensions and all possible categories
+    num_numerical_features, num_categorical_features, all_categories = BreastCancerDataset.get_feature_dimensions(
+        mam_train_data, mam_test_data)
+
     # Create datasets with appropriate transforms
     train_dataset = BreastCancerDataset(mam_train_data, transform=train_transform, train=True)
     val_dataset = BreastCancerDataset(mam_train_data, transform=val_test_transform, train=False)
     test_dataset = BreastCancerDataset(mam_test_data, transform=val_test_transform, train=False)
 
-    # Get the number of numerical and categorical features
-    num_numerical_features, num_categorical_features = train_dataset.get_feature_dimensions()
+    # Pad categorical features for all datasets
+    for dataset in [train_dataset, val_dataset, test_dataset]:
+        for cat in all_categories:
+            if cat not in dataset.categorical_features.columns:
+                dataset.categorical_features[cat] = 0
+        print(f"Shape of categorical features after padding: {dataset.categorical_features.shape}")
+
+    # Verify that the number of categorical features is consistent
+    assert train_dataset.categorical_features.shape[1] == val_dataset.categorical_features.shape[1] == \
+           test_dataset.categorical_features.shape[1], \
+        "Mismatch in number of categorical features between datasets"
+
+    # Pad categorical features for all datasets
+    for dataset in [train_dataset, val_dataset, test_dataset]:
+        for cat in all_categories:
+            if cat not in dataset.categorical_features.columns:
+                dataset.categorical_features[cat] = 0
+        dataset.categorical_features = dataset.categorical_features.astype(float)
+        print(f"Shape of categorical features after padding: {dataset.categorical_features.shape}")
+        print(f"Categorical feature dtypes: {dataset.categorical_features.dtypes.value_counts()}")
 
     # Split train dataset into train and validation
     train_size = int(0.8 * len(train_dataset))
@@ -415,6 +496,7 @@ def main():
     best_val_loss = float('inf')
     no_improve = 0
 
+    # Training loop
     for epoch in range(num_epochs):
         train_loss, train_acc = train(model, train_loader, criterion, optimizer, device, epoch, num_epochs)
         val_loss, val_acc = validate(model, val_loader, criterion, device, epoch, num_epochs)
@@ -436,10 +518,10 @@ def main():
             print("Early stopping!")
             break
 
-    """# Load best model and evaluate on test set
+    # Load best model and evaluate on test set
+    print("Loading best model and evaluating on test set...")
     model.load_state_dict(torch.load('best_model.pth'))
-    test_loss, test_acc = validate(model, test_loader, criterion, device)
-    print(f"Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.4f}")"""
+    accuracy, precision, recall, f1, auc_roc = test_model(model, test_loader, criterion, device)
 
 if __name__ == '__main__':
     main()

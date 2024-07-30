@@ -69,6 +69,9 @@ class MultimodalModel(nn.Module):
             param.requires_grad = True
 
     def forward(self, image, mask, numerical, categorical):
+        if categorical.shape[1] != self.cat_dense[0].in_features:
+            raise ValueError(
+                f"Expected {self.cat_dense[0].in_features} categorical features, but got {categorical.shape[1]}")
         x_img = self.efficientnet(image)
         x_mask = self.mask_layers(mask).view(mask.size(0), -1)
         x_num = self.num_dense(numerical)
