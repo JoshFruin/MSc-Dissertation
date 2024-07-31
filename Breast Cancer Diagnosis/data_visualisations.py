@@ -125,18 +125,6 @@ def show_images(dataset, num_images=5):
             axes[1, i].axis('off')
         plt.show()
 
-    """fig, axes = plt.subplots(2, num_images, figsize=(15, 6))
-    for i in range(num_images):
-        image, mask, label = dataset[i]
-        axes[0, i].imshow(image.squeeze(), cmap='gray')
-        axes[0, i].set_title(f"Label: {label}")
-        axes[0, i].axis('off')
-
-        axes[1, i].imshow(mask.squeeze(), cmap='gray')
-        axes[1, i].set_title("Mask")
-        axes[1, i].axis('off')
-    plt.show()"""
-
 def visualize_batch(dataloader, num_images=5):
     dataiter = iter(dataloader)
     images, masks, labels = next(dataiter)

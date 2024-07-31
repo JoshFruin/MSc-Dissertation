@@ -140,20 +140,6 @@ def verify_dataset_integrity(dataset, num_samples=5):
 
     print("Dataset integrity verification completed.")
 
-"""def check_data_range(dataset):
-
-    Check if the image and mask pixel values are within the expected range.
-
-    for i in range(len(dataset)):
-        image, mask, _ = dataset[i]
-        if not (image.min() >= 0 and image.max() <= 1):
-            print(f"Image {i} has values outside [0, 1] range:")
-            print(f"  Min: {image.min().item():.4f}, Max: {image.max().item():.4f}")
-        if not (mask.min() >= 0 and mask.max() <= 1):
-            print(f"Mask {i} has values outside [0, 1] range:")
-            print(f"  Min: {mask.min().item():.4f}, Max: {mask.max().item():.4f}")
-    print("Data range check completed.")"""
-
 def check_mask_values(dataset, num_samples=10):
     """
     Check the unique values in masks and their distribution.
