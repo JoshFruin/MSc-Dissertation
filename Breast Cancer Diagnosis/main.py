@@ -287,7 +287,7 @@ class AlignedTransform:
         self.flip_prob = flip_prob
         self.rotate_prob = rotate_prob
         self.max_rotation = max_rotation
-        self.normalize = transforms.Normalize(mean=[0.5], std=[0.5])  # For grayscale
+        self.normalize = transforms.Normalize(mean=[0.5], std=[0.5])
         self.to_tensor = transforms.ToTensor()
 
     def __call__(self, image, mask):
@@ -322,8 +322,10 @@ class AlignedTransform:
         # Normalize (only for image)
         image = self.normalize(image)
 
-        return image, mask
+        # Repeat the grayscale channel 3 times to create a 3-channel image
+        image = image.repeat(3, 1, 1)
 
+        return image, mask
 # Training loop
 def main():
     # Set up multiprocessing
@@ -530,12 +532,7 @@ def main():
         plt.tight_layout()
         plt.show()
 
-        """# Print debug information
-        print(f"Original image shape: {original_image.shape}, dtype: {original_image.dtype}")
-        print(f"Augmented image shape: {augmented_image.shape}, dtype: {augmented_image.dtype}")
-        print(f"Original numpy shape: {original_image_np.shape}, dtype: {original_image_np.dtype}")
-        print(f"Augmented numpy shape: {augmented_image_np.shape}, dtype: {augmented_image_np.dtype}")"""
-    # Usage
+    # Visualise Augs
     visualize_augmentations(train_dataset)
 
     def verify_augmentations(dataset, num_samples=10):

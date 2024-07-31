@@ -30,7 +30,7 @@ class MultimodalModel(nn.Module):
         self.efficientnet.classifier = nn.Identity()
 
         # Mask feature extractor
-        self.mask_conv = nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1, bias=False)
+        self.mask_conv = nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1, bias=False)  # Changed input channels to 1
         self.mask_bn = nn.BatchNorm2d(32)
         self.mask_layers = nn.Sequential(
             self.mask_conv, self.mask_bn, nn.ReLU(inplace=True),
@@ -73,7 +73,8 @@ class MultimodalModel(nn.Module):
             raise ValueError(
                 f"Expected {self.cat_dense[0].in_features} categorical features, but got {categorical.shape[1]}")
         x_img = self.efficientnet(image)
-        x_mask = self.mask_layers(mask).view(mask.size(0), -1)
+        x_mask = self.mask_layers(mask[:, 0:1, :, :])  # Use only the first channel of the mask
+        x_mask = x_mask.view(mask.size(0), -1)
         x_num = self.num_dense(numerical)
         x_cat = self.cat_dense(categorical)
 
