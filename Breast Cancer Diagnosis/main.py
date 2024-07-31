@@ -282,13 +282,19 @@ def test_model(model, test_loader, criterion, device):
     return accuracy, precision, recall, f1, auc_roc
 from torchvision.transforms import ToPILImage, ToTensor
 class AlignedTransform:
-    def __init__(self, size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=10):
+    def __init__(self, size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=10,
+                 brightness_range=(0.9, 1.1), contrast_range=(0.9, 1.1),
+                 crop_prob=0.3, crop_scale=(0.8, 1.0), crop_ratio=(0.75, 1.33)):
         self.size = size
         self.flip_prob = flip_prob
         self.rotate_prob = rotate_prob
         self.max_rotation = max_rotation
+        self.brightness_range = brightness_range
+        self.contrast_range = contrast_range
+        self.crop_prob = crop_prob
+        self.crop_scale = crop_scale
+        self.crop_ratio = crop_ratio
         self.normalize = transforms.Normalize(mean=[0.5], std=[0.5])
-        self.to_tensor = transforms.ToTensor()
 
     def __call__(self, image, mask):
         # Convert to PIL Image if tensor
@@ -299,6 +305,16 @@ class AlignedTransform:
 
         # Ensure image is grayscale
         image = image.convert("L")
+
+        # Random crop with adjusted parameters
+        if random.random() < self.crop_prob:
+            i, j, h, w = transforms.RandomResizedCrop.get_params(
+                image, scale=self.crop_scale, ratio=self.crop_ratio)
+            image = TF.resized_crop(image, i, j, h, w, self.size)
+            mask = TF.resized_crop(mask, i, j, h, w, self.size)
+        else:
+            image = TF.resize(image, self.size)
+            mask = TF.resize(mask, self.size)
 
         # Resize
         image = TF.resize(image, self.size)
@@ -315,9 +331,19 @@ class AlignedTransform:
             image = TF.rotate(image, angle)
             mask = TF.rotate(mask, angle)
 
+        # Random brightness adjustment
+        if random.random() < 0.5:
+            brightness_factor = random.uniform(self.brightness_range[0], self.brightness_range[1])
+            image = TF.adjust_brightness(image, brightness_factor)
+
+        # Random contrast adjustment
+        if random.random() < 0.5:
+            contrast_factor = random.uniform(self.contrast_range[0], self.contrast_range[1])
+            image = TF.adjust_contrast(image, contrast_factor)
+
         # Convert to tensor
-        image = self.to_tensor(image)
-        mask = self.to_tensor(mask)
+        image = TF.to_tensor(image)
+        mask = TF.to_tensor(mask)
 
         # Normalize (only for image)
         image = self.normalize(image)
@@ -326,6 +352,7 @@ class AlignedTransform:
         image = image.repeat(3, 1, 1)
 
         return image, mask
+
 # Training loop
 def main():
     # Set up multiprocessing
@@ -460,7 +487,15 @@ def main():
                                             stratify=mam_train_data['pathology'])
 
     # Define transforms
-    train_transform = AlignedTransform(size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=10)
+    train_transform = AlignedTransform(
+        size=(224, 224),
+        flip_prob=0.5,
+        rotate_prob=0.5,
+        max_rotation=10,
+        brightness_range=(0.8, 1.2),
+        contrast_range=(0.8, 1.2),
+        crop_prob=0.5
+    )
     val_test_transform = AlignedTransform(size=(224, 224), flip_prob=0, rotate_prob=0)
 
     # Assuming you have three DataFrames: train_df, val_df, and test_df for your datasets
