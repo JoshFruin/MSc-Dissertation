@@ -280,18 +280,26 @@ def test_model(model, test_loader, criterion, device):
     plt.show()
 
     return accuracy, precision, recall, f1, auc_roc
-
+from torchvision.transforms import ToPILImage, ToTensor
 class AlignedTransform:
     def __init__(self, size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=10):
         self.size = size
         self.flip_prob = flip_prob
         self.rotate_prob = rotate_prob
         self.max_rotation = max_rotation
-
-        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        self.color_jitter = transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)
+        self.normalize = transforms.Normalize(mean=[0.5], std=[0.5])  # For grayscale
+        self.to_tensor = transforms.ToTensor()
 
     def __call__(self, image, mask):
+        # Convert to PIL Image if tensor
+        if isinstance(image, torch.Tensor):
+            image = TF.to_pil_image(image)
+        if isinstance(mask, torch.Tensor):
+            mask = TF.to_pil_image(mask)
+
+        # Ensure image is grayscale
+        image = image.convert("L")
+
         # Resize
         image = TF.resize(image, self.size)
         mask = TF.resize(mask, self.size)
@@ -307,12 +315,9 @@ class AlignedTransform:
             image = TF.rotate(image, angle)
             mask = TF.rotate(mask, angle)
 
-        # Color jitter (only for image)
-        image = self.color_jitter(image)
-
         # Convert to tensor
-        image = TF.to_tensor(image)
-        mask = TF.to_tensor(mask)
+        image = self.to_tensor(image)
+        mask = self.to_tensor(mask)
 
         # Normalize (only for image)
         image = self.normalize(image)
@@ -472,6 +477,108 @@ def main():
     train_dataset = BreastCancerDataset(mam_train_data, transform=train_transform, categorical_columns=categorical_columns, all_categorical_columns=all_categorical_columns)
     val_dataset = BreastCancerDataset(mam_val_data, transform=val_test_transform, categorical_columns=categorical_columns, all_categorical_columns=all_categorical_columns)
     test_dataset = BreastCancerDataset(mam_test_data, transform=val_test_transform, categorical_columns=categorical_columns, all_categorical_columns=all_categorical_columns)
+    # Visualise Augmentations
+    def visualize_augmentations(dataset, num_samples=5):
+        fig, axes = plt.subplots(num_samples, 4, figsize=(20, 4 * num_samples))
+
+        for i in range(num_samples):
+            idx = np.random.randint(len(dataset))
+            original_image, original_mask, _, _, _ = dataset[idx]
+
+            # Apply augmentation
+            augmented_image, augmented_mask = dataset.transform(original_image, original_mask)
+
+            # Convert to numpy arrays and prepare for display
+            def prepare_for_display(img):
+                if img.shape[0] == 1:  # If grayscale
+                    img = img.squeeze(0)
+                else:  # If RGB
+                    img = img.permute(1, 2, 0)
+                img = img.numpy()
+                img = (img - img.min()) / (img.max() - img.min())
+                return img
+
+            original_image = prepare_for_display(original_image)
+            augmented_image = prepare_for_display(augmented_image)
+            original_mask = prepare_for_display(original_mask)
+            augmented_mask = prepare_for_display(augmented_mask)
+
+            # Display images
+            axes[i, 0].imshow(original_image, cmap='gray')
+            axes[i, 0].set_title('Original Image')
+            axes[i, 0].axis('off')
+
+            axes[i, 1].imshow(original_mask, cmap='gray')
+            axes[i, 1].set_title('Original Mask')
+            axes[i, 1].axis('off')
+
+            axes[i, 2].imshow(augmented_image, cmap='gray')
+            axes[i, 2].set_title('Augmented Image')
+            axes[i, 2].axis('off')
+
+            axes[i, 3].imshow(augmented_mask, cmap='gray')
+            axes[i, 3].set_title('Augmented Mask')
+            axes[i, 3].axis('off')
+
+            # Print applied transformations
+            print(f"Sample {i + 1} transformations:")
+            print(f"  Flip: {'Yes' if np.random.rand() < dataset.transform.flip_prob else 'No'}")
+            print(f"  Rotate: {'Yes' if np.random.rand() < dataset.transform.rotate_prob else 'No'}")
+            print(f"  Normalization: Applied to image")
+            print()
+
+        plt.tight_layout()
+        plt.show()
+
+        """# Print debug information
+        print(f"Original image shape: {original_image.shape}, dtype: {original_image.dtype}")
+        print(f"Augmented image shape: {augmented_image.shape}, dtype: {augmented_image.dtype}")
+        print(f"Original numpy shape: {original_image_np.shape}, dtype: {original_image_np.dtype}")
+        print(f"Augmented numpy shape: {augmented_image_np.shape}, dtype: {augmented_image_np.dtype}")"""
+    # Usage
+    visualize_augmentations(train_dataset)
+
+    def verify_augmentations(dataset, num_samples=10):
+        flip_count = 0
+        rotate_count = 0
+        total_brightness_change = 0
+        total_contrast_change = 0
+        total_saturation_change = 0
+
+        for _ in range(num_samples):
+            idx = np.random.randint(len(dataset))
+            original_image, original_mask, _, _, _ = dataset[idx]
+            augmented_image, augmented_mask = dataset.transform(original_image, original_mask)
+
+            # Check for flip
+            if torch.all(augmented_image.flip(dims=[2]) == original_image):
+                flip_count += 1
+
+            # Check for rotation (this is an approximation)
+            if not torch.allclose(augmented_image, original_image, atol=1e-3):
+                rotate_count += 1
+
+            # Check color jitter
+            orig_brightness = original_image.mean()
+            aug_brightness = augmented_image.mean()
+            total_brightness_change += abs(aug_brightness - orig_brightness)
+
+            orig_contrast = original_image.std()
+            aug_contrast = augmented_image.std()
+            total_contrast_change += abs(aug_contrast - orig_contrast)
+
+            orig_saturation = original_image.std(dim=0).mean()
+            aug_saturation = augmented_image.std(dim=0).mean()
+            total_saturation_change += abs(aug_saturation - orig_saturation)
+
+        print(f"Flip probability: {flip_count / num_samples:.2f}")
+        print(f"Rotation probability: {rotate_count / num_samples:.2f}")
+        print(f"Average brightness change: {total_brightness_change / num_samples:.4f}")
+        print(f"Average contrast change: {total_contrast_change / num_samples:.4f}")
+        print(f"Average saturation change: {total_saturation_change / num_samples:.4f}")
+
+    # Usage
+    verify_augmentations(train_dataset)
 
     # Create dataloaders
     batch_size = 32
@@ -492,7 +599,7 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=patience, verbose=True)
 
-    num_epochs = 5
+    num_epochs = 10
 
     best_val_loss = float('inf')
     no_improve = 0
