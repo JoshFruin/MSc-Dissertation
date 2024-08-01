@@ -37,7 +37,7 @@ warnings.filterwarnings("ignore", message="Failed to load image Python extension
 # Check torch version and if a GPU is available on the device
 from torch.utils.data import DataLoader, random_split
 from data_preparation import fix_image_paths, create_image_dict, fix_image_path_mass, fix_image_path_calc, rename_columns
-from utils import FocalLoss
+from utils import FocalLoss, WeightedFocalLoss
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
 
@@ -609,7 +609,7 @@ def main():
         print(f"Average contrast change: {total_contrast_change / num_samples:.4f}")
         print(f"Average saturation change: {total_saturation_change / num_samples:.4f}")
 
-    # Usage
+
     verify_augmentations(train_dataset)
 
     # Create dataloaders
@@ -627,11 +627,13 @@ def main():
 
     patience = 5
     #criterion = nn.CrossEntropyLoss()
-    criterion = FocalLoss()
+    #criterion = FocalLoss()
+    criterion = WeightedFocalLoss()
+    #criterion = ImprovedWeightedFocalLoss(alpha=1, gamma=2)
     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=patience, verbose=True)
 
-    num_epochs = 10
+    num_epochs = 30 #30 had early stop at 21
 
     best_val_loss = float('inf')
     no_improve = 0
