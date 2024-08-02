@@ -282,6 +282,9 @@ def test_model(model, test_loader, criterion, device):
     return accuracy, precision, recall, f1, auc_roc
 from torchvision.transforms import ToPILImage, ToTensor
 class AlignedTransform:
+    """
+    Perform safe augmentations for mammogram images and align mask and image transforms.
+    """
     def __init__(self, size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=10,
                  brightness_range=(0.9, 1.1), contrast_range=(0.9, 1.1),
                  crop_prob=0.3, crop_scale=(0.8, 1.0), crop_ratio=(0.75, 1.33)):
@@ -482,9 +485,97 @@ def main():
     print("\nValue counts for 'pathology' in train data:")
     print(mam_train_data['pathology'].value_counts(normalize=True))
 
+    """from imblearn.over_sampling import RandomOverSampler, SMOTE
+    # Oversample minority class to give it more representation in learning
+    def oversample_minority_class(X, y):
+        oversample = RandomOverSampler(sampling_strategy='minority')
+        X_resampled, y_resampled = oversample.fit_resample(X, y)
+        return X_resampled, y_resampled
+
+    X = mam_train_data.drop('pathology', axis=1)
+    y = mam_train_data['pathology']
+
+    X_resampled, y_resampled = oversample_minority_class(X, y)
+
+    # Create a new DataFrame with the resampled data
+    mam_train_data_resampled = pd.DataFrame(X_resampled, columns=X.columns)
+    mam_train_data_resampled['pathology'] = y_resampled"""
+    from imblearn.over_sampling import RandomOverSampler
+    from imblearn.under_sampling import RandomUnderSampler
+    from collections import Counter
+
+    from imblearn.combine import SMOTEENN
+    from collections import Counter
+
+    from imblearn.under_sampling import RandomUnderSampler
+    from imblearn.over_sampling import RandomOverSampler
+    from collections import Counter
+
+    def balanced_sampling(X, y, target_ratio):
+        """
+        Perform both oversampling of the minority class and undersampling of the majority class
+        to balance the dataset.
+
+        Parameters:
+        X (array-like): Feature matrix
+        y (array-like): Target vector
+        target_ratio (float): Desired ratio of minority to majority class.
+                              Should be between 0.0 and 1.0.
+
+        Returns:
+        X_resampled (array-like): The feature matrix after resampling
+        y_resampled (array-like): The target vector after resampling
+        """
+        # Count the occurrences of each class
+        class_counts = Counter(y)
+
+        # Identify majority and minority classes
+        majority_class = max(class_counts, key=class_counts.get)
+        minority_class = min(class_counts, key=class_counts.get)
+
+        # Calculate the target number of samples for each class
+        target_minority_count = int(class_counts[majority_class] * target_ratio)
+
+        # Ensure the target count for minority class is valid
+        target_minority_count = max(target_minority_count, class_counts[minority_class])
+
+        # Perform oversampling of the minority class
+        over = RandomOverSampler(sampling_strategy={minority_class: target_minority_count})
+        X_oversampled, y_oversampled = over.fit_resample(X, y)
+
+        # Recount the occurrences of each class after oversampling
+        new_class_counts = Counter(y_oversampled)
+
+        # Calculate the target number of samples for the majority class after oversampling
+        target_majority_count = int(new_class_counts[minority_class] / target_ratio)
+
+        # Ensure the target count for majority class is valid
+        target_majority_count = min(target_majority_count, class_counts[majority_class])
+
+        # Perform undersampling of the majority class
+        under = RandomUnderSampler(sampling_strategy={majority_class: target_majority_count})
+        X_resampled, y_resampled = under.fit_resample(X_oversampled, y_oversampled)
+
+        return X_resampled, y_resampled
+
+    X = mam_train_data.drop('pathology', axis=1)
+    y = mam_train_data['pathology']
+
+    # Print initial class distribution
+    print("Initial class distribution:", Counter(y))
+
+    X_resampled, y_resampled = balanced_sampling(X, y, target_ratio=1.0)
+
+    # Create a new DataFrame with the resampled data
+    mam_train_data_resampled = pd.DataFrame(X_resampled, columns=X.columns)
+    mam_train_data_resampled['pathology'] = y_resampled
+
+    # Print class distribution after resampling
+    print("Class distribution after resampling:", Counter(y_resampled))
+
     # Split the combined training data into train and validation sets
-    mam_train_data, mam_val_data = train_test_split(mam_train_data, test_size=0.2, random_state=42,
-                                            stratify=mam_train_data['pathology'])
+    mam_train_data, mam_val_data = train_test_split(mam_train_data_resampled, test_size=0.2, random_state=42,
+                                            stratify=mam_train_data_resampled['pathology'])
 
     # Define transforms
     train_transform = AlignedTransform(
@@ -631,9 +722,14 @@ def main():
     criterion = WeightedFocalLoss()
     #criterion = ImprovedWeightedFocalLoss(alpha=1, gamma=2)
     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=patience, verbose=True)
+    #scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=patience, verbose=True)
 
-    num_epochs = 30 #30 had early stop at 21
+    num_epochs = 30
+    # Calculate the total number of training steps
+    total_steps = len(train_loader) * num_epochs
+
+    # Create the OneCycleLR scheduler
+    scheduler = OneCycleLR(optimizer, max_lr=0.01, total_steps=total_steps)
 
     best_val_loss = float('inf')
     no_improve = 0

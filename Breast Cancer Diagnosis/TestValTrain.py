@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # Training Function
-def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs):
+def train(model, train_loader, criterion, optimizer, scheduler, device, epoch, num_epochs):
     model.train()
     running_loss = 0.0
     correct = 0
@@ -20,7 +20,10 @@ def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs):
             outputs = model(inputs, masks, numerical, categorical)
             loss = criterion(outputs, labels)
             loss.backward()
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
+            scheduler.step()  # Step the scheduler here
 
             running_loss += loss.item()
             _, predicted = torch.max(outputs, 1)
@@ -58,7 +61,6 @@ def validate(model, val_loader, criterion, device, epoch, num_epochs):
     epoch_loss = running_loss / len(val_loader)
     epoch_acc = correct / total
     return epoch_loss, epoch_acc
-
 
 def test_model(model, test_loader, criterion, device):
     model.eval()
