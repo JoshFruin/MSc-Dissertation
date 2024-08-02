@@ -1,7 +1,9 @@
 import matplotlib.pyplot as plt
+import numpy as np
 import seaborn as sns
 import os
 import matplotlib.image as mpimg
+import torch
 
 def visualise_data(mass_train, calc_train):
     # Set the color palette for mass_train
@@ -171,3 +173,95 @@ def dataloader_visualisations(train_dataset, test_dataset, train_loader, test_lo
     print(f"Images Shape: {images.shape}")
     print(f"Masks Shape: {masks.shape}")
     print(f"Labels Shape: {labels.shape}")
+
+# Visualise Augmentations
+def visualize_augmentations(dataset, num_samples=5):
+    fig, axes = plt.subplots(num_samples, 4, figsize=(20, 4 * num_samples))
+
+    for i in range(num_samples):
+        idx = np.random.randint(len(dataset))
+        original_image, original_mask, _, _, _ = dataset[idx]
+
+        # Apply augmentation
+        augmented_image, augmented_mask = dataset.transform(original_image, original_mask)
+
+        # Convert to numpy arrays and prepare for display
+        def prepare_for_display(img):
+            if img.shape[0] == 1:  # If grayscale
+                img = img.squeeze(0)
+            else:  # If RGB
+                img = img.permute(1, 2, 0)
+            img = img.numpy()
+            img = (img - img.min()) / (img.max() - img.min())
+            return img
+
+        original_image = prepare_for_display(original_image)
+        augmented_image = prepare_for_display(augmented_image)
+        original_mask = prepare_for_display(original_mask)
+        augmented_mask = prepare_for_display(augmented_mask)
+
+        # Display images
+        axes[i, 0].imshow(original_image, cmap='gray')
+        axes[i, 0].set_title('Original Image')
+        axes[i, 0].axis('off')
+
+        axes[i, 1].imshow(original_mask, cmap='gray')
+        axes[i, 1].set_title('Original Mask')
+        axes[i, 1].axis('off')
+
+        axes[i, 2].imshow(augmented_image, cmap='gray')
+        axes[i, 2].set_title('Augmented Image')
+        axes[i, 2].axis('off')
+
+        axes[i, 3].imshow(augmented_mask, cmap='gray')
+        axes[i, 3].set_title('Augmented Mask')
+        axes[i, 3].axis('off')
+
+        # Print applied transformations
+        print(f"Sample {i + 1} transformations:")
+        print(f"  Flip: {'Yes' if np.random.rand() < dataset.transform.flip_prob else 'No'}")
+        print(f"  Rotate: {'Yes' if np.random.rand() < dataset.transform.rotate_prob else 'No'}")
+        print(f"  Normalization: Applied to image")
+        print()
+
+    plt.tight_layout()
+    plt.show()
+
+def verify_augmentations(dataset, num_samples=10):
+    flip_count = 0
+    rotate_count = 0
+    total_brightness_change = 0
+    total_contrast_change = 0
+    total_saturation_change = 0
+
+    for _ in range(num_samples):
+        idx = np.random.randint(len(dataset))
+        original_image, original_mask, _, _, _ = dataset[idx]
+        augmented_image, augmented_mask = dataset.transform(original_image, original_mask)
+
+        # Check for flip
+        if torch.all(augmented_image.flip(dims=[2]) == original_image):
+            flip_count += 1
+
+        # Check for rotation (this is an approximation)
+        if not torch.allclose(augmented_image, original_image, atol=1e-3):
+            rotate_count += 1
+
+        # Check color jitter
+        orig_brightness = original_image.mean()
+        aug_brightness = augmented_image.mean()
+        total_brightness_change += abs(aug_brightness - orig_brightness)
+
+        orig_contrast = original_image.std()
+        aug_contrast = augmented_image.std()
+        total_contrast_change += abs(aug_contrast - orig_contrast)
+
+        orig_saturation = original_image.std(dim=0).mean()
+        aug_saturation = augmented_image.std(dim=0).mean()
+        total_saturation_change += abs(aug_saturation - orig_saturation)
+
+    print(f"Flip probability: {flip_count / num_samples:.2f}")
+    print(f"Rotation probability: {rotate_count / num_samples:.2f}")
+    print(f"Average brightness change: {total_brightness_change / num_samples:.4f}")
+    print(f"Average contrast change: {total_contrast_change / num_samples:.4f}")
+    print(f"Average saturation change: {total_saturation_change / num_samples:.4f}")
