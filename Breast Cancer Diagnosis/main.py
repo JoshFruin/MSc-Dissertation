@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torchvision
 from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms.functional as TF
@@ -231,11 +232,58 @@ def main():
     visualize_augmentations(train_dataset)
     verify_augmentations(train_dataset)
 
+    class BalancedBatchSampler(torch.utils.data.sampler.Sampler):
+        def __init__(self, dataset, labels=None):
+            self.labels = labels
+            self.dataset = dict()
+            self.balanced_max = 0
+            # Save all the indices for all the classes
+            for idx in range(0, len(dataset)):
+                label = self._get_label(dataset, idx)
+                if label not in self.dataset:
+                    self.dataset[label] = list()
+                self.dataset[label].append(idx)
+                self.balanced_max = len(self.dataset[label]) \
+                    if len(self.dataset[label]) > self.balanced_max else self.balanced_max
+
+            # Oversample the classes with fewer elements than the max
+            for label in self.dataset:
+                while len(self.dataset[label]) < self.balanced_max:
+                    self.dataset[label].append(random.choice(self.dataset[label]))
+            self.keys = list(self.dataset.keys())
+            self.currentkey = 0
+            self.indices = [-1] * len(self.keys)
+
+        def __iter__(self):
+            while self.indices[self.currentkey] < self.balanced_max - 1:
+                self.indices[self.currentkey] += 1
+                yield self.dataset[self.keys[self.currentkey]][self.indices[self.currentkey]]
+                self.currentkey = (self.currentkey + 1) % len(self.keys)
+            self.indices = [-1] * len(self.keys)
+
+        def _get_label(self, dataset, idx, labels=None):
+            if self.labels is not None:
+                return self.labels[idx].item()
+            else:
+                # Trying guessing
+                dataset_type = type(dataset)
+                if dataset_type is torchvision.datasets.MNIST:
+                    return dataset.train_labels[idx].item()
+                elif dataset_type is torchvision.datasets.ImageFolder:
+                    return dataset.imgs[idx][1]
+                else:
+                    raise Exception("You should pass the tensor of labels to the constructor as second argument")
+
+        def __len__(self):
+            return self.balanced_max * len(self.keys)
+
+    sampler = BalancedBatchSampler(train_dataset, labels=train_dataset.labels)
+
     # Create dataloaders
     batch_size = 32
     num_workers = min(os.cpu_count(), 6)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers,
-                              pin_memory=True)
+    train_loader = DataLoader(train_dataset,  batch_size=batch_size, shuffle=True, num_workers=num_workers,
+                              pin_memory=True)# batch_sampler=sampler,
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers,
                              pin_memory=True)
@@ -249,9 +297,10 @@ def main():
     patience = 3 # 5
     #criterion = nn.CrossEntropyLoss()
     #criterion = FocalLoss()
-    criterion = WeightedFocalLoss(alpha=1.2, gamma=2)
+    criterion = WeightedFocalLoss(alpha=1.5, gamma=2.5)
     #criterion = ImprovedWeightedFocalLoss(alpha=1, gamma=2)
-    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
+    #optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
     #scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=patience, verbose=True)
 
     num_epochs = 30
@@ -259,15 +308,27 @@ def main():
     total_steps = len(train_loader) * num_epochs
 
     # Create the OneCycleLR scheduler
-    scheduler = OneCycleLR(optimizer, max_lr=0.005, total_steps=total_steps, pct_start=0.3)
+    #scheduler = OneCycleLR(optimizer, max_lr=0.005, total_steps=total_steps, pct_start=0.3)
+    #scheduler = OneCycleLR(optimizer, max_lr=0.01, epochs=num_epochs, steps_per_epoch=len(train_loader))
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
 
     best_val_loss = float('inf')
     no_improve = 0
+
+    train_losses = []
+    val_losses = []
+    train_accuracies = []
+    val_accuracies = []
 
     # Training loop
     for epoch in range(num_epochs):
         train_loss, train_acc = train(model, train_loader, criterion, optimizer, device, epoch, num_epochs, scheduler)
         val_loss, val_acc = validate(model, val_loader, criterion, device, epoch, num_epochs)
+
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+        train_accuracies.append(train_acc)
+        val_accuracies.append(val_acc)
 
         scheduler.step(val_loss)
 
@@ -286,6 +347,22 @@ def main():
             print("Early stopping!")
             break
 
+    # After training, plot the metrics
+    plt.figure(figsize=(12, 4))
+    plt.subplot(1, 2, 1)
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Validation Loss')
+    plt.legend()
+    plt.title('Loss vs. Epochs')
+
+    plt.subplot(1, 2, 2)
+    plt.plot(train_accuracies, label='Train Accuracy')
+    plt.plot(val_accuracies, label='Validation Accuracy')
+    plt.legend()
+    plt.title('Accuracy vs. Epochs')
+
+    plt.show()
+
     # Load best model and evaluate on test set
     print("Loading best model and evaluating on test set...")
     model.load_state_dict(torch.load('best_model.pth'))
@@ -293,7 +370,7 @@ def main():
     # After training the model:
     analyze_feature_importance(model)
 
-    analyze_misclassifications(misclassified_samples)
+    #analyze_misclassifications(misclassified_samples)
 
 if __name__ == '__main__':
     main()

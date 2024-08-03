@@ -19,8 +19,28 @@ class AttentionBlock(nn.Module):
         attention_weights = self.attention(x)
         return x * attention_weights
 
+class MultiHeadAttentionBlock(nn.Module):
+    def __init__(self, in_features, num_heads):
+        super(MultiHeadAttentionBlock, self).__init__()
+        self.num_heads = num_heads
+        self.attention_heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(in_features, in_features // 2),
+                nn.ReLU(),
+                nn.Linear(in_features // 2, in_features),
+                nn.Sigmoid()
+            ) for _ in range(num_heads)
+        ])
+        self.fc = nn.Linear(in_features * num_heads, in_features)
+
+    def forward(self, x):
+        attentions = [head(x) for head in self.attention_heads]
+        x = torch.cat(attentions, dim=-1)
+        x = self.fc(x)
+        return x
+
 class MultimodalModel(nn.Module):
-    def __init__(self, num_numerical_features, num_categorical_features, dropout_rate=0.5):
+    def __init__(self, num_numerical_features, num_categorical_features, dropout_rate=0.5, num_heads=4):
         super(MultimodalModel, self).__init__()
 
         # Image feature extractor (EfficientNet-B0)
@@ -30,7 +50,7 @@ class MultimodalModel(nn.Module):
         self.efficientnet.classifier = nn.Identity()
 
         # Mask feature extractor
-        self.mask_conv = nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1, bias=False)  # Changed input channels to 1
+        self.mask_conv = nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1, bias=False)
         self.mask_bn = nn.BatchNorm2d(32)
         self.mask_layers = nn.Sequential(
             self.mask_conv, self.mask_bn, nn.ReLU(inplace=True),
@@ -41,16 +61,18 @@ class MultimodalModel(nn.Module):
         self.num_dense = nn.Sequential(
             nn.Linear(num_numerical_features, 128),
             nn.ReLU(),
-            nn.Linear(128, 64)
+            nn.Linear(128, 64),
+            nn.Dropout(dropout_rate)
         )
         self.cat_dense = nn.Sequential(
             nn.Linear(num_categorical_features, 128),
             nn.ReLU(),
-            nn.Linear(128, 64)
+            nn.Linear(128, 64),
+            nn.Dropout(dropout_rate)
         )
 
-        # Attention mechanism
-        self.attention = AttentionBlock(num_ftrs + 32 + 64 + 64)
+        # Multi-head attention mechanism
+        self.attention = MultiHeadAttentionBlock(num_ftrs + 32 + 64 + 64, num_heads)
 
         # Fully connected layers
         self.fc1 = nn.Linear(num_ftrs + 32 + 64 + 64, 512)
@@ -80,12 +102,12 @@ class MultimodalModel(nn.Module):
 
         combined = torch.cat((x_img, x_mask, x_num, x_cat), dim=1)
 
-        # Apply attention
+        # Apply multi-head attention
         combined = self.attention(combined)
 
-        x = relu(self.bn1(self.fc1(combined)))
+        x = F.relu(self.bn1(self.fc1(combined)))
         x = self.dropout(x)
-        x = relu(self.bn2(self.fc2(x)))
+        x = F.relu(self.bn2(self.fc2(x)))
         x = self.dropout(x)
         x = self.fc3(x)
 

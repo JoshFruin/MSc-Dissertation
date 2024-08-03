@@ -5,6 +5,7 @@ from sklearn.utils.class_weight import compute_class_weight
 import numpy as np
 from torchvision.transforms import transforms
 import torchvision.transforms.functional as TF
+import torch.nn.functional as F
 from imblearn.under_sampling import RandomUnderSampler
 from imblearn.over_sampling import RandomOverSampler
 from collections import Counter
@@ -28,6 +29,7 @@ class FocalLoss(nn.Module):
         else:
             return focal_loss
 
+
 class WeightedFocalLoss(nn.Module):
     def __init__(self, alpha=1, gamma=2, reduction='mean'):
         super(WeightedFocalLoss, self).__init__()
@@ -37,19 +39,16 @@ class WeightedFocalLoss(nn.Module):
         self.class_weights = None
 
     def update_class_weights(self, targets):
-        # Compute class weights once and store them
         if self.class_weights is None:
-            class_weights = compute_class_weight('balanced', classes=np.unique(targets.cpu()),
-                                                 y=targets.cpu().numpy())
-            self.class_weights = torch.tensor(class_weights, dtype=torch.float32).to(targets.device)
+            class_counts = torch.bincount(targets)
+            total_samples = class_counts.sum()
+            class_weights = total_samples / (len(class_counts) * class_counts.float())
+            self.class_weights = class_weights.to(targets.device)
 
     def forward(self, inputs, targets):
         self.update_class_weights(targets)
 
-        # Apply class weights to logits
-        weighted_inputs = inputs * self.class_weights.unsqueeze(0)
-
-        ce_loss = nn.functional.cross_entropy(weighted_inputs, targets, reduction='none')
+        ce_loss = F.cross_entropy(inputs, targets, weight=self.class_weights, reduction='none')
         pt = torch.exp(-ce_loss)
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
 
@@ -66,10 +65,10 @@ class AlignedTransform:
     Perform safe augmentations for mammogram images and align mask and image transforms.
     """
 
-    def __init__(self, size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=3,
-                 brightness_range=(0.97, 1.03), contrast_range=(0.97, 1.03),
-                 crop_prob=0.2, crop_scale=(0.95, 1.0), crop_ratio=(0.95, 1.05),
-                 noise_prob=0.2, noise_factor=0.02):
+    def __init__(self, size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=10,
+                 brightness_range=(0.9, 1.1), contrast_range=(0.9, 1.1),
+                 crop_prob=0.3, crop_scale=(0.8, 1.0), crop_ratio=(0.9, 1.1),
+                 noise_prob=0.3, noise_factor=0.05):
         self.size = size
         self.flip_prob = flip_prob
         self.rotate_prob = rotate_prob
@@ -82,6 +81,7 @@ class AlignedTransform:
         self.noise_prob = noise_prob
         self.noise_factor = noise_factor
         self.normalize = transforms.Normalize(mean=[0.5], std=[0.5])
+        self.elastic_transform = transforms.ElasticTransform(alpha=50.0, sigma=5.0)
 
     def __call__(self, image, mask):
         # Convert to PIL Image if tensor
@@ -130,6 +130,11 @@ class AlignedTransform:
             noise = torch.randn(image.size()) * self.noise_factor
             image = torch.clamp(image + noise, 0, 1)
             image = TF.to_pil_image(image)
+
+        # Add elastic deformation
+        if random.random() < 0.3:
+            image = self.elastic_transform(image)
+            mask = self.elastic_transform(mask)
 
         # Convert to tensor
         image = TF.to_tensor(image)
