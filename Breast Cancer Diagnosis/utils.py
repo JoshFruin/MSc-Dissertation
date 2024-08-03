@@ -65,9 +65,11 @@ class AlignedTransform:
     """
     Perform safe augmentations for mammogram images and align mask and image transforms.
     """
-    def __init__(self, size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=10,
-                 brightness_range=(0.9, 1.1), contrast_range=(0.9, 1.1),
-                 crop_prob=0.3, crop_scale=(0.8, 1.0), crop_ratio=(0.75, 1.33)):
+
+    def __init__(self, size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=3,
+                 brightness_range=(0.97, 1.03), contrast_range=(0.97, 1.03),
+                 crop_prob=0.2, crop_scale=(0.95, 1.0), crop_ratio=(0.95, 1.05),
+                 noise_prob=0.2, noise_factor=0.02):
         self.size = size
         self.flip_prob = flip_prob
         self.rotate_prob = rotate_prob
@@ -77,6 +79,8 @@ class AlignedTransform:
         self.crop_prob = crop_prob
         self.crop_scale = crop_scale
         self.crop_ratio = crop_ratio
+        self.noise_prob = noise_prob
+        self.noise_factor = noise_factor
         self.normalize = transforms.Normalize(mean=[0.5], std=[0.5])
 
     def __call__(self, image, mask):
@@ -99,34 +103,40 @@ class AlignedTransform:
             image = TF.resize(image, self.size)
             mask = TF.resize(mask, self.size)
 
-        # Resize
-        image = TF.resize(image, self.size)
-        mask = TF.resize(mask, self.size)
-
-        # Random horizontal flip
+        # Random horizontal flip (mirroring)
         if random.random() < self.flip_prob:
             image = TF.hflip(image)
             mask = TF.hflip(mask)
 
-        # Random rotation
+        # Random rotation (reduced max angle)
         if random.random() < self.rotate_prob:
             angle = random.uniform(-self.max_rotation, self.max_rotation)
-            image = TF.rotate(image, angle)
-            mask = TF.rotate(mask, angle)
+            image = TF.rotate(image, angle, fill=0)
+            mask = TF.rotate(mask, angle, fill=0)
 
-        # Random brightness adjustment
+        # Random brightness adjustment (more subtle)
         if random.random() < 0.5:
             brightness_factor = random.uniform(self.brightness_range[0], self.brightness_range[1])
             image = TF.adjust_brightness(image, brightness_factor)
 
-        # Random contrast adjustment
+        # Random contrast adjustment (more subtle)
         if random.random() < 0.5:
             contrast_factor = random.uniform(self.contrast_range[0], self.contrast_range[1])
             image = TF.adjust_contrast(image, contrast_factor)
 
+        # Add random noise (simulating image acquisition variations)
+        if random.random() < self.noise_prob:
+            image = TF.to_tensor(image)
+            noise = torch.randn(image.size()) * self.noise_factor
+            image = torch.clamp(image + noise, 0, 1)
+            image = TF.to_pil_image(image)
+
         # Convert to tensor
         image = TF.to_tensor(image)
         mask = TF.to_tensor(mask)
+
+        # Ensure pixel values are in [0, 1] range
+        image = torch.clamp(image, 0, 1)
 
         # Normalize (only for image)
         image = self.normalize(image)

@@ -30,6 +30,7 @@ from data_verification import (verify_data_linkage, verify_dataset_integrity,
                                verify_image_mask_correspondence, verify_batch, verify_labels) #check_data_range,
 from models import SimpleCNN, TransferLearningModel, MultimodalModel
 import torchvision.models as models
+from collections import Counter
 import multiprocessing
 # Suppress the specific torchvision warning
 warnings.filterwarnings("ignore", message="Failed to load image Python extension")
@@ -37,6 +38,7 @@ warnings.filterwarnings("ignore", message="Failed to load image Python extension
 from torch.utils.data import DataLoader, random_split
 from data_preparation import fix_image_paths, create_image_dict, fix_image_path_mass, fix_image_path_calc, rename_columns, BreastCancerDataset
 from utils import FocalLoss, WeightedFocalLoss, AlignedTransform, balanced_sampling
+from train_test_val import train, validate, test_model, analyze_misclassifications, analyze_feature_importance
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
 
@@ -45,113 +47,6 @@ def get_combined_categorical_columns(train_df, val_df, test_df, categorical_colu
     combined_dummies = pd.get_dummies(combined_df, columns=categorical_columns, dummy_na=True)
     return combined_dummies.columns.tolist()
 
-# Training Function
-def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs, scheduler):
-    model.train()
-    running_loss = 0.0
-    correct = 0
-    total = 0
-
-    with tqdm(total=len(train_loader), desc=f"Epoch {epoch + 1}/{num_epochs} - Training", leave=False) as pbar:
-        for inputs, masks, numerical, categorical, labels in train_loader:
-            inputs, masks, numerical, categorical, labels = inputs.to(device), masks.to(device), numerical.to(device), categorical.to(device), labels.to(device)
-
-            optimizer.zero_grad()
-
-            outputs = model(inputs, masks, numerical, categorical)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            scheduler.step()
-
-            running_loss += loss.item()
-            _, predicted = torch.max(outputs, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-
-            pbar.update(1)
-
-    epoch_loss = running_loss / len(train_loader)
-    epoch_acc = correct / total
-    return epoch_loss, epoch_acc
-
-# Validation function
-def validate(model, val_loader, criterion, device, epoch, num_epochs):
-    model.eval()
-    running_loss = 0.0
-    correct = 0
-    total = 0
-
-    with torch.no_grad():
-        with tqdm(total=len(val_loader), desc=f"Epoch {epoch + 1}/{num_epochs} - Validation", leave=False) as pbar:
-            for inputs, masks, numerical, categorical, labels in val_loader:
-                inputs, masks, numerical, categorical, labels = inputs.to(device), masks.to(device), numerical.to(device), categorical.to(device), labels.to(device)
-
-                outputs = model(inputs, masks, numerical, categorical)
-                loss = criterion(outputs, labels)
-
-                running_loss += loss.item()
-                _, predicted = torch.max(outputs, 1)
-                total += labels.size(0)
-                correct += (predicted == labels).sum().item()
-
-                pbar.update(1)
-
-    epoch_loss = running_loss / len(val_loader)
-    epoch_acc = correct / total
-    return epoch_loss, epoch_acc
-
-
-def test_model(model, test_loader, criterion, device):
-    model.eval()
-    all_preds = []
-    all_labels = []
-    running_loss = 0.0
-
-    with torch.no_grad():
-        for inputs, masks, numerical, categorical, labels in tqdm(test_loader, desc="Testing"):
-            inputs, masks, numerical, categorical, labels = inputs.to(device), masks.to(device), numerical.to(
-                device), categorical.to(device), labels.to(device)
-
-            outputs = model(inputs, masks, numerical, categorical)
-            loss = criterion(outputs, labels)
-            running_loss += loss.item()
-
-            _, preds = torch.max(outputs, 1)
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-
-    # Calculate metrics
-    accuracy = accuracy_score(all_labels, all_preds)
-    precision = precision_score(all_labels, all_preds, average='weighted')
-    recall = recall_score(all_labels, all_preds, average='weighted')
-    f1 = f1_score(all_labels, all_preds, average='weighted')
-    auc_roc = roc_auc_score(all_labels, all_preds)
-
-    # Confusion matrix
-    cm = confusion_matrix(all_labels, all_preds)
-
-    # Print results
-    print(f"Test Loss: {running_loss / len(test_loader):.4f}")
-    print(f"Accuracy: {accuracy:.4f}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall: {recall:.4f}")
-    print(f"F1 Score: {f1:.4f}")
-    print(f"AUC-ROC: {auc_roc:.4f}")
-
-    # Plot confusion matrix
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-    plt.title('Confusion Matrix')
-    plt.ylabel('True Label')
-    plt.xlabel('Predicted Label')
-    plt.show()
-
-    return accuracy, precision, recall, f1, auc_roc
-
-# Training loop
 def main():
     # Set up multiprocessing
     if __name__ == '__main__':
@@ -232,11 +127,8 @@ def main():
 
     # check unique values in pathology column
     mass_train_data.pathology.unique()
-
     calc_train_data.pathology.unique()
-
     mass_train_data.info()
-
     calc_train_data.info()
 
     # Rename columns for all dataframes
@@ -280,17 +172,14 @@ def main():
     print("\nValue counts for 'pathology' in train data:")
     print(mam_train_data['pathology'].value_counts(normalize=True))
 
-    from imblearn.under_sampling import RandomUnderSampler
-    from imblearn.over_sampling import RandomOverSampler
-    from collections import Counter
-
     X = mam_train_data.drop('pathology', axis=1)
     y = mam_train_data['pathology']
 
     # Print initial class distribution
     print("Initial class distribution:", Counter(y))
 
-    X_resampled, y_resampled = balanced_sampling(X, y, target_ratio=1.0)
+    # Balance the imbalance of the classes in the dataset
+    X_resampled, y_resampled = balanced_sampling(X, y, target_ratio=1.2)
 
     # Create a new DataFrame with the resampled data
     mam_train_data_resampled = pd.DataFrame(X_resampled, columns=X.columns)
@@ -303,15 +192,21 @@ def main():
     mam_train_data, mam_val_data = train_test_split(mam_train_data_resampled, test_size=0.2, random_state=42,
                                             stratify=mam_train_data_resampled['pathology'])
 
+    print("Validation set class distribution:", Counter(mam_val_data['pathology']))
+
     # Define transforms
     train_transform = AlignedTransform(
         size=(224, 224),
         flip_prob=0.5,
         rotate_prob=0.5,
-        max_rotation=10,
-        brightness_range=(0.8, 1.2),
-        contrast_range=(0.8, 1.2),
-        crop_prob=0.5
+        max_rotation=3,
+        brightness_range=(0.97, 1.03),
+        contrast_range=(0.97, 1.03),
+        crop_prob=0.2,
+        crop_scale=(0.95, 1.0),
+        crop_ratio=(0.95, 1.05),
+        noise_prob=0.2,
+        noise_factor=0.02
     )
     val_test_transform = AlignedTransform(size=(224, 224), flip_prob=0, rotate_prob=0)
 
@@ -334,7 +229,6 @@ def main():
 
     # Visualise Augs
     visualize_augmentations(train_dataset)
-
     verify_augmentations(train_dataset)
 
     # Create dataloaders
@@ -348,14 +242,16 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(device)
-    model = MultimodalModel(num_numerical_features, num_categorical_features).to(device)
 
-    patience = 5
+    model = MultimodalModel(num_numerical_features, num_categorical_features, dropout_rate=0.6).to(device)
+
+    # Patience for early stopping to prevent overfitting - number means how many epochs to stop on no improvement
+    patience = 3 # 5
     #criterion = nn.CrossEntropyLoss()
     #criterion = FocalLoss()
-    criterion = WeightedFocalLoss()
+    criterion = WeightedFocalLoss(alpha=1.2, gamma=2)
     #criterion = ImprovedWeightedFocalLoss(alpha=1, gamma=2)
-    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     #scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=patience, verbose=True)
 
     num_epochs = 30
@@ -363,7 +259,7 @@ def main():
     total_steps = len(train_loader) * num_epochs
 
     # Create the OneCycleLR scheduler
-    scheduler = OneCycleLR(optimizer, max_lr=0.01, total_steps=total_steps)
+    scheduler = OneCycleLR(optimizer, max_lr=0.005, total_steps=total_steps, pct_start=0.3)
 
     best_val_loss = float('inf')
     no_improve = 0
@@ -393,7 +289,11 @@ def main():
     # Load best model and evaluate on test set
     print("Loading best model and evaluating on test set...")
     model.load_state_dict(torch.load('best_model.pth'))
-    accuracy, precision, recall, f1, auc_roc = test_model(model, test_loader, criterion, device)
+    accuracy, precision, recall, f1, auc_roc, misclassified_samples = test_model(model, test_loader, criterion, device)
+    # After training the model:
+    analyze_feature_importance(model)
+
+    analyze_misclassifications(misclassified_samples)
 
 if __name__ == '__main__':
     main()
