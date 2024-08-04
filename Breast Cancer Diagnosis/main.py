@@ -232,58 +232,11 @@ def main():
     visualize_augmentations(train_dataset)
     verify_augmentations(train_dataset)
 
-    class BalancedBatchSampler(torch.utils.data.sampler.Sampler):
-        def __init__(self, dataset, labels=None):
-            self.labels = labels
-            self.dataset = dict()
-            self.balanced_max = 0
-            # Save all the indices for all the classes
-            for idx in range(0, len(dataset)):
-                label = self._get_label(dataset, idx)
-                if label not in self.dataset:
-                    self.dataset[label] = list()
-                self.dataset[label].append(idx)
-                self.balanced_max = len(self.dataset[label]) \
-                    if len(self.dataset[label]) > self.balanced_max else self.balanced_max
-
-            # Oversample the classes with fewer elements than the max
-            for label in self.dataset:
-                while len(self.dataset[label]) < self.balanced_max:
-                    self.dataset[label].append(random.choice(self.dataset[label]))
-            self.keys = list(self.dataset.keys())
-            self.currentkey = 0
-            self.indices = [-1] * len(self.keys)
-
-        def __iter__(self):
-            while self.indices[self.currentkey] < self.balanced_max - 1:
-                self.indices[self.currentkey] += 1
-                yield self.dataset[self.keys[self.currentkey]][self.indices[self.currentkey]]
-                self.currentkey = (self.currentkey + 1) % len(self.keys)
-            self.indices = [-1] * len(self.keys)
-
-        def _get_label(self, dataset, idx, labels=None):
-            if self.labels is not None:
-                return self.labels[idx].item()
-            else:
-                # Trying guessing
-                dataset_type = type(dataset)
-                if dataset_type is torchvision.datasets.MNIST:
-                    return dataset.train_labels[idx].item()
-                elif dataset_type is torchvision.datasets.ImageFolder:
-                    return dataset.imgs[idx][1]
-                else:
-                    raise Exception("You should pass the tensor of labels to the constructor as second argument")
-
-        def __len__(self):
-            return self.balanced_max * len(self.keys)
-
-    sampler = BalancedBatchSampler(train_dataset, labels=train_dataset.labels)
-
     # Create dataloaders
     batch_size = 32
     num_workers = min(os.cpu_count(), 6)
     train_loader = DataLoader(train_dataset,  batch_size=batch_size, shuffle=True, num_workers=num_workers,
-                              pin_memory=True)# batch_sampler=sampler,
+                              pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers,
                              pin_memory=True)
@@ -297,7 +250,11 @@ def main():
     patience = 3 # 5
     #criterion = nn.CrossEntropyLoss()
     #criterion = FocalLoss()
-    criterion = WeightedFocalLoss(alpha=1.5, gamma=2.5)
+    """
+    Alpha is the class weight parameter. It's used to address class imbalance by assigning different weights to different classes.
+    Gamma is the focusing parameter. It determines the rate at which easy examples are down-weighted in the loss function.
+    """
+    criterion = WeightedFocalLoss(alpha=6, gamma=2)
     #criterion = ImprovedWeightedFocalLoss(alpha=1, gamma=2)
     #optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
@@ -360,17 +317,14 @@ def main():
     plt.plot(val_accuracies, label='Validation Accuracy')
     plt.legend()
     plt.title('Accuracy vs. Epochs')
-
     plt.show()
 
     # Load best model and evaluate on test set
     print("Loading best model and evaluating on test set...")
     model.load_state_dict(torch.load('best_model.pth'))
-    accuracy, precision, recall, f1, auc_roc, misclassified_samples = test_model(model, test_loader, criterion, device)
+    accuracy, precision, recall, f1, auc_roc, misclassified_samples, correctly_classified_samples = test_model(model, test_loader, criterion, device)
     # After training the model:
     analyze_feature_importance(model)
-
-    #analyze_misclassifications(misclassified_samples)
 
 if __name__ == '__main__':
     main()

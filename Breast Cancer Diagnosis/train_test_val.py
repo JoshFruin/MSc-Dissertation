@@ -5,6 +5,9 @@ from matplotlib import pyplot as plt
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve, auc
 import seaborn as sns
 import torch.nn.functional as F
+from PIL import Image
+from XAI import GradCAM, apply_colormap, visualize_gradcam
+
 # Training Function
 def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs, scheduler):
     model.train()
@@ -70,6 +73,7 @@ def test_model(model, test_loader, criterion, device):
     all_labels = []
     all_probs = []
     running_loss = 0.0
+    correctly_classified_samples = []
     misclassified_samples = []
 
     with torch.no_grad():
@@ -88,10 +92,22 @@ def test_model(model, test_loader, criterion, device):
             all_probs.extend(
                 probs[:, 1].cpu().numpy())  # Assuming binary classification, use the positive class probability
 
-            # Collect misclassified samples
+            # Collect misclassified and correctly classified samples
             misclassified_indices = (preds != labels).nonzero(as_tuple=True)[0]
+            correctly_classified_indices = (preds == labels).nonzero(as_tuple=True)[0]
+
             for idx in misclassified_indices:
                 misclassified_samples.append({
+                    'input': inputs[idx],
+                    'mask': masks[idx],
+                    'numerical': numerical[idx],
+                    'categorical': categorical[idx],
+                    'true_label': labels[idx].item(),
+                    'predicted_label': preds[idx].item()
+                })
+
+            for idx in correctly_classified_indices[:len(misclassified_indices)]:  # Balance the number of samples
+                correctly_classified_samples.append({
                     'input': inputs[idx],
                     'mask': masks[idx],
                     'numerical': numerical[idx],
@@ -166,8 +182,61 @@ def test_model(model, test_loader, criterion, device):
     plt.legend(loc="lower right")
     plt.show()
 
-    return accuracy, precision, recall, f1, auc_roc, misclassified_samples
+    # Analyze both correctly classified and misclassified samples with Grad-CAM
+    analyze_samples_with_gradcam(model, correctly_classified_samples, misclassified_samples, device)
 
+    return accuracy, precision, recall, f1, auc_roc, misclassified_samples, correctly_classified_samples
+
+def analyze_samples_with_gradcam(model, correctly_classified_samples, misclassified_samples, device, num_samples=3):
+    gradcam = GradCAM(model, model.efficientnet.features[-1])
+
+    def process_sample(sample, is_correct):
+        input_image = sample['input'].unsqueeze(0).to(device)
+        mask = sample['mask'].unsqueeze(0).to(device)
+        numerical = sample['numerical'].unsqueeze(0).to(device)
+        categorical = sample['categorical'].unsqueeze(0).to(device)
+
+        # Generate heatmap
+        heatmap = gradcam.generate_cam((input_image, mask, numerical, categorical))
+
+        # Convert tensor to PIL Image for visualization
+        original_img = Image.fromarray(
+            (input_image.squeeze().permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8))
+
+        # Apply colormap and overlay
+        cam_image = apply_colormap(heatmap, original_img)
+
+        # Process the mask
+        mask_np = mask.squeeze().cpu().numpy()
+        if mask_np.ndim == 3 and mask_np.shape[0] == 3:
+            mask_np = np.mean(mask_np, axis=0)
+        mask_np = (mask_np - mask_np.min()) / (mask_np.max() - mask_np.min())
+
+        # Display results
+        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
+        ax1.imshow(original_img)
+        ax1.set_title(f"{'Correct' if is_correct else 'Incorrect'}\nTrue: {sample['true_label']}, Predicted: {sample['predicted_label']}")
+        ax1.axis('off')
+        ax2.imshow(cam_image)
+        ax2.set_title('Grad-CAM')
+        ax2.axis('off')
+        ax3.imshow(mask_np, cmap='gray')
+        ax3.set_title('Mask')
+        ax3.axis('off')
+        plt.tight_layout()
+        plt.show()
+
+        print(f"Numerical features: {sample['numerical'].cpu().numpy()}")
+        print(f"Categorical features: {sample['categorical'].cpu().numpy()}")
+        print("\n")
+
+    print("Correctly Classified Samples:")
+    for sample in correctly_classified_samples[:num_samples]:
+        process_sample(sample, is_correct=True)
+
+    print("Misclassified Samples:")
+    for sample in misclassified_samples[:num_samples]:
+        process_sample(sample, is_correct=False)
 # Analyze misclassified samples
 def analyze_misclassifications(misclassified_samples):
     for i, sample in enumerate(misclassified_samples[:5]):  # Analyze first 5 misclassified samples
@@ -218,36 +287,36 @@ def analyze_feature_importance(model):
         [f'Categorical {i+1}' for i in range(categorical_features)]
     )
 
-    def improved_feature_importance(feature_importance, feature_labels, top_n=20):
-        # Sort features by importance
-        sorted_idx = np.argsort(feature_importance)[::-1]
-        sorted_importance = feature_importance[sorted_idx]
-        sorted_labels = [feature_labels[i] for i in sorted_idx]
+def improved_feature_importance(feature_importance, feature_labels, top_n=20):
+    # Sort features by importance
+    sorted_idx = np.argsort(feature_importance)[::-1]
+    sorted_importance = feature_importance[sorted_idx]
+    sorted_labels = [feature_labels[i] for i in sorted_idx]
 
-        # Select top N features
-        top_importance = sorted_importance[:top_n]
-        top_labels = sorted_labels[:top_n]
+    # Select top N features
+    top_importance = sorted_importance[:top_n]
+    top_labels = sorted_labels[:top_n]
 
-        # Create color map
-        color_map = {'Image': 'blue', 'Mask': 'green', 'Numerical': 'red', 'Categorical': 'orange'}
-        colors = [color_map[label.split()[0]] for label in top_labels]
+    # Create color map
+    color_map = {'Image': 'blue', 'Mask': 'green', 'Numerical': 'red', 'Categorical': 'orange'}
+    colors = [color_map[label.split()[0]] for label in top_labels]
 
-        # Plot
-        plt.figure(figsize=(12, 8))
-        bars = plt.barh(range(top_n), top_importance, align='center', color=colors)
-        plt.yticks(range(top_n), top_labels)
-        plt.xlabel('Importance')
-        plt.title(f'Top {top_n} Feature Importance')
+    # Plot
+    plt.figure(figsize=(12, 8))
+    bars = plt.barh(range(top_n), top_importance, align='center', color=colors)
+    plt.yticks(range(top_n), top_labels)
+    plt.xlabel('Importance')
+    plt.title(f'Top {top_n} Feature Importance')
 
-        # Add legend
-        handles = [plt.Rectangle((0,0),1,1, color=color) for color in color_map.values()]
-        plt.legend(handles, color_map.keys(), loc='lower right')
+    # Add legend
+    handles = [plt.Rectangle((0,0),1,1, color=color) for color in color_map.values()]
+    plt.legend(handles, color_map.keys(), loc='lower right')
 
-        # Add value labels on the bars
-        for bar in bars:
-            width = bar.get_width()
-            plt.text(width, bar.get_y() + bar.get_height()/2, f'{width:.4f}',
-                     ha='left', va='center')
+    # Add value labels on the bars
+    for bar in bars:
+        width = bar.get_width()
+        plt.text(width, bar.get_y() + bar.get_height()/2, f'{width:.4f}',
+                 ha='left', va='center')
 
-        plt.tight_layout()
-        plt.show()
+    plt.tight_layout()
+    plt.show()
