@@ -8,8 +8,23 @@ import torch.nn.functional as F
 from PIL import Image
 from XAI import GradCAM, apply_colormap, visualize_gradcam
 
-# Training Function
 def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs, scheduler):
+    """
+    Trains the model for one epoch.
+
+    Args:
+        model (torch.nn.Module): The neural network model to train.
+        train_loader (torch.utils.data.DataLoader): DataLoader for the training dataset.
+        criterion (torch.nn.Module): Loss function.
+        optimizer (torch.optim.Optimizer): Optimization algorithm.
+        device (torch.device): Device to run the training on (CPU or GPU).
+        epoch (int): Current epoch number.
+        num_epochs (int): Total number of epochs.
+        scheduler (torch.optim.lr_scheduler._LRScheduler): Learning rate scheduler.
+
+    Returns:
+        tuple: (epoch_loss, epoch_acc) - The average loss and accuracy for this epoch.
+    """
     model.train()
     running_loss = 0.0
     correct = 0
@@ -17,18 +32,24 @@ def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs, 
 
     with tqdm(total=len(train_loader), desc=f"Epoch {epoch + 1}/{num_epochs} - Training", leave=False) as pbar:
         for inputs, masks, numerical, categorical, labels in train_loader:
+            # Move data to the specified device
             inputs, masks, numerical, categorical, labels = inputs.to(device), masks.to(device), numerical.to(device), categorical.to(device), labels.to(device)
 
+            # Zero the parameter gradients
             optimizer.zero_grad()
 
+            # Forward pass
             outputs = model(inputs, masks, numerical, categorical)
             loss = criterion(outputs, labels)
+
+            # Backward pass and optimise
             loss.backward()
-            # Gradient clipping
+            # Gradient clipping to prevent exploding gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
 
+            # Statistics
             running_loss += loss.item()
             _, predicted = torch.max(outputs, 1)
             total += labels.size(0)
@@ -40,8 +61,21 @@ def train(model, train_loader, criterion, optimizer, device, epoch, num_epochs, 
     epoch_acc = correct / total
     return epoch_loss, epoch_acc
 
-# Validation function
 def validate(model, val_loader, criterion, device, epoch, num_epochs):
+    """
+    Validates the model on the validation dataset.
+
+    Args:
+        model (torch.nn.Module): The neural network model to validate.
+        val_loader (torch.utils.data.DataLoader): DataLoader for the validation dataset.
+        criterion (torch.nn.Module): Loss function.
+        device (torch.device): Device to run the validation on (CPU or GPU).
+        epoch (int): Current epoch number.
+        num_epochs (int): Total number of epochs.
+
+    Returns:
+        tuple: (epoch_loss, epoch_acc) - The average loss and accuracy for this epoch on the validation set.
+    """
     model.eval()
     running_loss = 0.0
     correct = 0
@@ -50,11 +84,14 @@ def validate(model, val_loader, criterion, device, epoch, num_epochs):
     with torch.no_grad():
         with tqdm(total=len(val_loader), desc=f"Epoch {epoch + 1}/{num_epochs} - Validation", leave=False) as pbar:
             for inputs, masks, numerical, categorical, labels in val_loader:
+                # Move data to the specified device
                 inputs, masks, numerical, categorical, labels = inputs.to(device), masks.to(device), numerical.to(device), categorical.to(device), labels.to(device)
 
+                # Forward pass
                 outputs = model(inputs, masks, numerical, categorical)
                 loss = criterion(outputs, labels)
 
+                # Statistics
                 running_loss += loss.item()
                 _, predicted = torch.max(outputs, 1)
                 total += labels.size(0)
@@ -68,6 +105,18 @@ def validate(model, val_loader, criterion, device, epoch, num_epochs):
 
 
 def test_model(model, test_loader, criterion, device):
+    """
+    Tests the model on the test dataset and computes various metrics.
+
+    Args:
+        model (torch.nn.Module): The neural network model to test.
+        test_loader (torch.utils.data.DataLoader): DataLoader for the test dataset.
+        criterion (torch.nn.Module): Loss function.
+        device (torch.device): Device to run the testing on (CPU or GPU).
+
+    Returns:
+        tuple: (accuracy, precision, recall, f1, auc_roc, misclassified_samples, correctly_classified_samples)
+    """
     model.eval()
     all_preds = []
     all_labels = []
@@ -78,15 +127,20 @@ def test_model(model, test_loader, criterion, device):
 
     with torch.no_grad():
         for inputs, masks, numerical, categorical, labels in tqdm(test_loader, desc="Testing"):
+            # Move data to the specified device
             inputs, masks, numerical, categorical, labels = inputs.to(device), masks.to(device), numerical.to(
                 device), categorical.to(device), labels.to(device)
 
+            # Forward pass
             outputs = model(inputs, masks, numerical, categorical)
             loss = criterion(outputs, labels)
             running_loss += loss.item()
 
+            # Compute probabilities and predictions
             probs = F.softmax(outputs, dim=1)
             _, preds = torch.max(outputs, 1)
+
+            # Store predictions, labels, and probabilities
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
             all_probs.extend(
@@ -144,7 +198,7 @@ def test_model(model, test_loader, criterion, device):
     fpr, tpr, thresholds = roc_curve(all_labels, all_probs)
     roc_auc = auc(fpr, tpr)
 
-    # Calculate TNR and FNR
+    # Calculate True Negative Rate (TNR) and False Negative Rate (FNR)
     tnr = 1 - fpr
     fnr = 1 - tpr
 
@@ -182,24 +236,35 @@ def test_model(model, test_loader, criterion, device):
     plt.legend(loc="lower right")
     plt.show()
 
-    # Analyze both correctly classified and misclassified samples with Grad-CAM
+    # Analyse both correctly classified and misclassified samples with Grad-CAM
     analyze_samples_with_gradcam(model, correctly_classified_samples, misclassified_samples, device)
 
     return accuracy, precision, recall, f1, auc_roc, misclassified_samples, correctly_classified_samples
 
 def analyze_samples_with_gradcam(model, correctly_classified_samples, misclassified_samples, device, num_samples=3):
+    """
+    Analyzes correctly classified and misclassified samples using Grad-CAM.
+
+    Args:
+        model (torch.nn.Module): The neural network model.
+        correctly_classified_samples (list): List of correctly classified samples.
+        misclassified_samples (list): List of misclassified samples.
+        device (torch.device): Device to run the analysis on (CPU or GPU).
+        num_samples (int): Number of samples to analyze from each category.
+    """
     gradcam = GradCAM(model, model.efficientnet.features[-1])
 
     def process_sample(sample, is_correct):
+        # Prepare input data
         input_image = sample['input'].unsqueeze(0).to(device)
         mask = sample['mask'].unsqueeze(0).to(device)
         numerical = sample['numerical'].unsqueeze(0).to(device)
         categorical = sample['categorical'].unsqueeze(0).to(device)
 
-        # Generate heatmap
+        # Generate Grad-CAM heatmap
         heatmap = gradcam.generate_cam((input_image, mask, numerical, categorical))
 
-        # Convert tensor to PIL Image for visualization
+        # Convert tensor to PIL Image for visualisation
         original_img = Image.fromarray(
             (input_image.squeeze().permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8))
 
@@ -237,8 +302,14 @@ def analyze_samples_with_gradcam(model, correctly_classified_samples, misclassif
     print("Misclassified Samples:")
     for sample in misclassified_samples[:num_samples]:
         process_sample(sample, is_correct=False)
-# Analyze misclassified samples
+
 def analyze_misclassifications(misclassified_samples):
+    """
+    Analyzes misclassified samples by visualizing input images, masks, and features.
+
+    Args:
+        misclassified_samples (list): List of misclassified samples.
+    """
     for i, sample in enumerate(misclassified_samples[:5]):  # Analyze first 5 misclassified samples
         plt.figure(figsize=(10, 5))
 
@@ -264,7 +335,7 @@ def analyze_misclassifications(misclassified_samples):
         print(f"Categorical features: {sample['categorical'].cpu()}")
         print("\n")
 
-def analyze_feature_importance(model):
+"""def analyze_feature_importance(model):
     # Get the weights of the final fully connected layer
     fc3_weights = model.fc3.weight.data.cpu().numpy()
 
@@ -319,4 +390,4 @@ def improved_feature_importance(feature_importance, feature_labels, top_n=20):
                  ha='left', va='center')
 
     plt.tight_layout()
-    plt.show()
+    plt.show()"""

@@ -12,15 +12,24 @@ def verify_data_linkage(original_csv_path, processed_df, full_mammogram_dict, ro
     """
     Verify that images, masks, and labels are correctly linked from original CSV through preprocessing.
 
+    This function performs the following steps:
+    1. Loads the original CSV file
+    2. Selects random samples from the processed dataframe
+    3. For each sample:
+       - Finds corresponding data in the original CSV
+       - Verifies file paths and existence
+       - Loads and displays the image, mask, and overlay
+       - Prints relevant information for manual verification
+
     Args:
-    original_csv_path (str): Path to the original CSV file.
+    original_csv_path (str): Path to the original CSV file containing raw data.
     processed_df (pd.DataFrame): The processed dataframe containing image paths and labels.
     full_mammogram_dict (dict): Dictionary mapping keys to full mammogram image paths.
     roi_mask_dict (dict): Dictionary mapping keys to ROI mask image paths.
-    num_samples (int): Number of random samples to verify.
+    num_samples (int): Number of random samples to verify. Default is 5.
 
     Returns:
-    None. Prints verification results and displays images.
+    None. Prints verification results and displays images for visual inspection.
     """
     print(f"Verifying {num_samples} random samples...")
 
@@ -107,6 +116,21 @@ def verify_data_linkage(original_csv_path, processed_df, full_mammogram_dict, ro
     print("Data linkage verification completed.")
 
 def verify_dataset_integrity(dataset, num_samples=5):
+    """
+    Verify the integrity of the dataset by checking random samples.
+
+    This function performs the following checks on random samples:
+    1. Verifies image and mask shapes
+    2. Ensures labels are within the expected range
+    3. Visualizes the image, mask, and overlay for manual inspection
+
+    Args:
+    dataset: The dataset to verify. Should support indexing and return (image, mask, label) tuples.
+    num_samples (int): Number of random samples to verify. Default is 5.
+
+    Returns:
+    None. Prints verification results and displays images for visual inspection.
+    """
     print(f"Verifying {num_samples} random samples from the dataset...")
     for i in range(num_samples):
         idx = random.randint(0, len(dataset) - 1)
@@ -143,6 +167,19 @@ def verify_dataset_integrity(dataset, num_samples=5):
 def check_mask_values(dataset, num_samples=10):
     """
     Check the unique values in masks and their distribution.
+
+    This function examines random samples from the dataset and:
+    1. Prints the unique values found in each mask
+    2. Displays a histogram of mask values
+
+    This helps identify any unexpected values or distributions in the masks.
+
+    Args:
+    dataset: The dataset to check. Should support indexing and return (image, mask, label) tuples.
+    num_samples (int): Number of random samples to check. Default is 10.
+
+    Returns:
+    None. Prints the results of the mask value checks.
     """
     for i in range(num_samples):
         _, mask, _ = dataset[i]
@@ -161,6 +198,20 @@ def check_mask_values(dataset, num_samples=10):
 def check_data_consistency(train_dataset, val_dataset, test_dataset):
     """
     Check for data leakage between train, validation, and test sets.
+
+    This function ensures that there is no overlap between the different dataset splits.
+    It performs the following checks:
+    1. Identifies any images that appear in multiple datasets
+    2. Reports the number of overlapping images, if any
+    3. Prints sample overlapping image paths for further investigation
+
+    Args:
+    train_dataset: The training dataset. Should have a 'data' attribute with 'image file path' column.
+    val_dataset: The validation dataset. Should have a 'data' attribute with 'image file path' column.
+    test_dataset: The test dataset. Should have a 'data' attribute with 'image file path' column.
+
+    Returns:
+    None. Prints the results of the consistency check.
     """
     train_images = set(train_dataset.data['image file path'])
     val_images = set(val_dataset.data['image file path'])
@@ -190,6 +241,16 @@ def check_data_consistency(train_dataset, val_dataset, test_dataset):
 def check_label_consistency(dataset):
     """
     Check if labels are consistent with the content of the images and masks.
+
+    This function verifies that:
+    1. Benign samples (label 0) have a relatively small mask area
+    2. Malignant samples (label 1) have a non-empty mask
+
+    Args:
+    dataset: The dataset to check. Should support indexing and return (image, mask, label) tuples.
+
+    Returns:
+    None. Prints the result of the consistency check or raises an AssertionError if inconsistencies are found.
     """
     for i in range(len(dataset)):
         image, mask, label = dataset[i]
@@ -200,6 +261,22 @@ def check_label_consistency(dataset):
     print("Labels are consistent with image and mask content.")
 
 def visualize_augmented_samples(dataset, image_transform, num_samples=5):
+    """
+    Visualize original and augmented samples from the dataset.
+
+    This function:
+    1. Selects random samples from the dataset
+    2. Applies the specified image transformations
+    3. Displays the original and augmented images side by side
+
+    Args:
+    dataset: The dataset to sample from. Should support indexing and return (image, mask, label) tuples.
+    image_transform: The transformation to apply to the images.
+    num_samples (int): Number of samples to visualize. Default is 5.
+
+    Returns:
+    None. Displays the original and augmented images.
+    """
     fig, axes = plt.subplots(num_samples, 2, figsize=(10, 5 * num_samples))
     for i in range(num_samples):
         idx = np.random.randint(len(dataset))
@@ -221,6 +298,18 @@ def visualize_augmented_samples(dataset, image_transform, num_samples=5):
 def verify_data_loading(dataset, num_samples=5):
     """
     Verify that images, masks, and labels are correctly linked by visualizing random samples.
+
+    This function:
+    1. Selects random samples from the dataset
+    2. Displays the image, mask, and image with mask overlay
+    3. Shows the label for each sample
+
+    Args:
+    dataset: The dataset to verify. Should support indexing and return (image, mask, label) tuples.
+    num_samples (int): Number of random samples to visualize. Default is 5.
+
+    Returns:
+    None. Displays the visualizations for manual inspection.
     """
     fig, axes = plt.subplots(num_samples, 3, figsize=(15, 5 * num_samples))
     for i in range(num_samples):
@@ -240,6 +329,17 @@ def verify_data_loading(dataset, num_samples=5):
 def verify_label_distribution(dataset):
     """
     Verify the distribution of labels in the dataset.
+
+    This function:
+    1. Extracts labels from all samples in the dataset
+    2. Computes the frequency of each unique label
+    3. Visualizes the label distribution as a bar plot
+
+    Args:
+    dataset: The dataset to verify. Should support indexing and return (image, mask, label) tuples.
+
+    Returns:
+    None. Displays a bar plot of the label distribution.
     """
     labels = [dataset[i][2] for i in range(len(dataset))]
     unique, counts = np.unique(labels, return_counts=True)
@@ -252,6 +352,20 @@ def verify_label_distribution(dataset):
 def verify_image_mask_correspondence(dataset, num_samples=5):
     """
     Verify that images and masks correspond to each other.
+
+    This function:
+    1. Selects random samples from the dataset
+    2. Computes the overlap between image content and mask
+    3. Prints the overlap percentage for each sample
+
+    A high overlap indicates good correspondence between the image and its mask.
+
+    Args:
+    dataset: The dataset to verify. Should support indexing and return (image, mask, label) tuples.
+    num_samples (int): Number of random samples to check. Default is 5.
+
+    Returns:
+    None. Prints the overlap percentages for the selected samples.
     """
     for i in range(num_samples):
         idx = random.randint(0, len(dataset) - 1)
@@ -266,12 +380,45 @@ def verify_image_mask_correspondence(dataset, num_samples=5):
         print(f"Sample {i + 1}: Overlap between image content and mask: {overlap:.2f}")
 
 def verify_batch(dataloader):
+    """
+    Verify the structure and content of a batch from the dataloader.
+
+    This function:
+    1. Retrieves a single batch from the dataloader
+    2. Prints the shapes of images, masks, and labels in the batch
+    3. Displays the labels present in the batch
+    4. Shows the data types of images, masks, and labels
+
+    This helps ensure that the dataloader is correctly formatting and returning batches.
+
+    Args:
+    dataloader: A PyTorch DataLoader object to verify.
+
+    Returns:
+    None. Prints information about the batch for manual verification.
+    """
     images, masks, labels = next(iter(dataloader))
     print(f"Batch shape: Images {images.shape}, Masks {masks.shape}, Labels {labels.shape}")
     print(f"Labels in batch: {labels}")
     print(f"Image dtype: {images.dtype}, Mask dtype: {masks.dtype}, Label dtype: {labels.dtype}")
 
 def verify_labels(dataset, num_samples=10):
+    """
+    Verify the labels of random samples from the dataset.
+
+    This function:
+    1. Selects random samples from the dataset
+    2. Prints the label for each selected sample
+
+    This helps in quick manual verification of label correctness and distribution.
+
+    Args:
+    dataset: The dataset to verify. Should support indexing and return (image, mask, label) tuples.
+    num_samples (int): Number of random samples to check. Default is 10.
+
+    Returns:
+    None. Prints the labels of the selected samples for manual verification.
+    """
     for i in range(num_samples):
         idx = np.random.randint(len(dataset))
         _, _, label = dataset[idx]

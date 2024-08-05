@@ -4,9 +4,20 @@ import torch.nn.functional as F
 import torchvision.models as models
 from torch.nn.functional import relu
 
-# Define the model
 class AttentionBlock(nn.Module):
+    """
+    Implements a simple attention mechanism for feature weighting.
+
+    This block applies self-attention to the input features, allowing the model
+    to focus on the most relevant features for the task at hand.
+    """
     def __init__(self, in_features):
+        """
+        Initialize the AttentionBlock.
+
+        Args:
+            in_features (int): Number of input features.
+        """
         super().__init__()
         self.attention = nn.Sequential(
             nn.Linear(in_features, in_features // 2),
@@ -16,11 +27,33 @@ class AttentionBlock(nn.Module):
         )
 
     def forward(self, x):
+        """
+        Apply attention mechanism to input features.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, in_features).
+
+        Returns:
+            torch.Tensor: Attention-weighted features of the same shape as input.
+        """
         attention_weights = self.attention(x)
         return x * attention_weights
 
 class MultiHeadAttentionBlock(nn.Module):
+    """
+    Implements a multi-head attention mechanism for enhanced feature interaction.
+
+    This block applies multiple attention heads in parallel, allowing the model
+    to capture different types of feature interactions simultaneously.
+    """
     def __init__(self, in_features, num_heads):
+        """
+        Initialize the MultiHeadAttentionBlock.
+
+        Args:
+            in_features (int): Number of input features.
+            num_heads (int): Number of attention heads.
+        """
         super(MultiHeadAttentionBlock, self).__init__()
         self.num_heads = num_heads
         self.attention_heads = nn.ModuleList([
@@ -34,13 +67,38 @@ class MultiHeadAttentionBlock(nn.Module):
         self.fc = nn.Linear(in_features * num_heads, in_features)
 
     def forward(self, x):
+        """
+        Apply multi-head attention mechanism to input features.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, in_features).
+
+        Returns:
+            torch.Tensor: Multi-head attention-weighted features of shape (batch_size, in_features).
+        """
         attentions = [head(x) for head in self.attention_heads]
         x = torch.cat(attentions, dim=-1)
         x = self.fc(x)
         return x
 
 class MultimodalModel(nn.Module):
+    """
+    A multimodal neural network model that combines image, mask, numerical, and categorical data.
+
+    This model uses EfficientNet-B0 for image feature extraction, applies convolutions to mask data,
+    and processes numerical and categorical data through dense layers. It then combines all features
+    using multi-head attention before final classification.
+    """
     def __init__(self, num_numerical_features, num_categorical_features, dropout_rate=0.5, num_heads=4):
+        """
+        Initialize the MultimodalModel.
+
+        Args:
+            num_numerical_features (int): Number of numerical input features.
+            num_categorical_features (int): Number of categorical input features.
+            dropout_rate (float): Dropout rate for regularization.
+            num_heads (int): Number of attention heads in the multi-head attention block.
+        """
         super(MultimodalModel, self).__init__()
 
         # Image feature extractor (EfficientNet-B0)
@@ -84,6 +142,13 @@ class MultimodalModel(nn.Module):
         self.bn2 = nn.BatchNorm1d(256)
 
     def unfreeze_last_n_layers(self, model, n):
+        """
+        Unfreeze the last n layers of a model for fine-tuning.
+
+        Args:
+            model (nn.Module): The model to partially unfreeze.
+            n (int): Number of layers to unfreeze from the end.
+        """
         params = list(model.parameters())
         for param in params[:-n]:
             param.requires_grad = False
@@ -91,20 +156,39 @@ class MultimodalModel(nn.Module):
             param.requires_grad = True
 
     def forward(self, image, mask, numerical, categorical):
+        """
+        Forward pass of the multimodal model.
+
+        Args:
+            image (torch.Tensor): Batch of input images.
+            mask (torch.Tensor): Batch of input masks.
+            numerical (torch.Tensor): Batch of numerical features.
+            categorical (torch.Tensor): Batch of categorical features.
+
+        Returns:
+            torch.Tensor: Model output (logits) for each class.
+        """
         if categorical.shape[1] != self.cat_dense[0].in_features:
             raise ValueError(
                 f"Expected {self.cat_dense[0].in_features} categorical features, but got {categorical.shape[1]}")
+        # Process image features
         x_img = self.efficientnet(image)
+
+        # Process mask features
         x_mask = self.mask_layers(mask[:, 0:1, :, :])  # Use only the first channel of the mask
         x_mask = x_mask.view(mask.size(0), -1)
+
+        # Process numerical and categorical feature
         x_num = self.num_dense(numerical)
         x_cat = self.cat_dense(categorical)
 
+        # Combine all features
         combined = torch.cat((x_img, x_mask, x_num, x_cat), dim=1)
 
         # Apply multi-head attention
         combined = self.attention(combined)
 
+        # Final fully connected layers
         x = F.relu(self.bn1(self.fc1(combined)))
         x = self.dropout(x)
         x = F.relu(self.bn2(self.fc2(x)))

@@ -39,11 +39,23 @@ warnings.filterwarnings("ignore", message="Failed to load image Python extension
 from torch.utils.data import DataLoader, random_split
 from data_preparation import fix_image_paths, create_image_dict, fix_image_path_mass, fix_image_path_calc, rename_columns, BreastCancerDataset
 from utils import FocalLoss, WeightedFocalLoss, AlignedTransform, balanced_sampling
-from train_test_val import train, validate, test_model, analyze_misclassifications, analyze_feature_importance
+from train_test_val import train, validate, test_model, analyze_misclassifications #, analyze_feature_importance
 # Suppress all warnings globally
 warnings.filterwarnings("ignore")
 
 def get_combined_categorical_columns(train_df, val_df, test_df, categorical_columns):
+    """
+        Combine categorical columns from train, validation, and test datasets and create dummy variables.
+
+        Args:
+        train_df (pd.DataFrame): Training dataset
+        val_df (pd.DataFrame): Validation dataset
+        test_df (pd.DataFrame): Test dataset
+        categorical_columns (list): List of categorical column names
+
+        Returns:
+        list: List of all dummy variable column names
+        """
     combined_df = pd.concat([train_df[categorical_columns], val_df[categorical_columns], test_df[categorical_columns]], axis=0)
     combined_dummies = pd.get_dummies(combined_df, columns=categorical_columns, dummy_na=True)
     return combined_dummies.columns.tolist()
@@ -54,28 +66,24 @@ def main():
         multiprocessing.set_start_method('spawn', force=True)
 
     """
+    Main function to orchestrate the breast cancer classification pipeline.
+    This function handles data loading, preprocessing, model training, and evaluation.
     For the mammograms we're using the CBIS-DDSM dataset from Kaggle: https://www.kaggle.com/datasets/awsaf49/cbis-ddsm-breast-cancer-image-dataset/data
     """
 
-    # Provide the correct path to the CSV files
+    # Define file paths
     csv_path_meta = 'C:/Users/jafru/OneDrive - University of Plymouth/MSc Dissertation/cbis-ddsm-breast-cancer-image-dataset/csv/meta.csv'
     csv_path_dicom = 'C:/Users/jafru/OneDrive - University of Plymouth/MSc Dissertation/cbis-ddsm-breast-cancer-image-dataset/csv/dicom_info.csv'
+    mass_train_path = 'C:/Users/jafru/OneDrive - University of Plymouth/MSc Dissertation/cbis-ddsm-breast-cancer-image-dataset/csv/mass_case_description_train_set.csv'
+    mass_test_path = 'C:/Users/jafru/OneDrive - University of Plymouth/MSc Dissertation/cbis-ddsm-breast-cancer-image-dataset/csv/mass_case_description_test_set.csv'
+    calc_train_path = 'C:/Users/jafru/OneDrive - University of Plymouth/MSc Dissertation/cbis-ddsm-breast-cancer-image-dataset/csv/calc_case_description_train_set.csv'
+    calc_test_path = 'C:/Users/jafru/OneDrive - University of Plymouth/MSc Dissertation/cbis-ddsm-breast-cancer-image-dataset/csv/calc_case_description_test_set.csv'
 
     # Read the CSV files into DataFrames
     df_meta = pd.read_csv(csv_path_meta)
     dicom_data = pd.read_csv(csv_path_dicom)
-
-    # Read the CSV files for mass data
-    mass_train_path = 'C:/Users/jafru/OneDrive - University of Plymouth/MSc Dissertation/cbis-ddsm-breast-cancer-image-dataset/csv/mass_case_description_train_set.csv'
-    mass_test_path = 'C:/Users/jafru/OneDrive - University of Plymouth/MSc Dissertation/cbis-ddsm-breast-cancer-image-dataset/csv/mass_case_description_test_set.csv'
-
     mass_train_data = pd.read_csv(mass_train_path)
     mass_test_data = pd.read_csv(mass_test_path)
-
-    # Read the CSV files for calc data
-    calc_train_path = 'C:/Users/jafru/OneDrive - University of Plymouth/MSc Dissertation/cbis-ddsm-breast-cancer-image-dataset/csv/calc_case_description_train_set.csv'
-    calc_test_path = 'C:/Users/jafru/OneDrive - University of Plymouth/MSc Dissertation/cbis-ddsm-breast-cancer-image-dataset/csv/calc_case_description_test_set.csv'
-
     calc_train_data = pd.read_csv(calc_train_path)
     calc_test_data = pd.read_csv(calc_test_path)
 
@@ -91,17 +99,16 @@ def main():
     # Apply the function to the image paths
     dicom_data['image_path'] = fix_image_paths(dicom_data['image_path'], image_dir)
 
-    # Filter the DataFrame based on SeriesDescription
+    # Filter and create image dictionaries
     full_mammogram_images = dicom_data[dicom_data.SeriesDescription == 'full mammogram images'].image_path
     cropped_images = dicom_data[dicom_data.SeriesDescription == 'cropped images'].image_path
     roi_mask_images = dicom_data[dicom_data.SeriesDescription == 'ROI mask images'].image_path
 
-    # Create dictionaries for each image type
     full_mammogram_dict = create_image_dict(full_mammogram_images)
     cropped_dict = create_image_dict(cropped_images)
     roi_mask_dict = create_image_dict(roi_mask_images)
 
-    # Display a sample item from each dictionary (optional, for checking)
+    # Display a sample item from each dictionary
     print(next(iter(full_mammogram_dict.items())))
     print(next(iter(cropped_dict.items())))
     print(next(iter(roi_mask_dict.items())))
@@ -114,7 +121,7 @@ def main():
     mass_train_data = fix_image_path_mass(mass_train_data, full_mammogram_dict, cropped_dict, roi_mask_dict)
     mass_test_data = fix_image_path_mass(mass_test_data, full_mammogram_dict, cropped_dict, roi_mask_dict)
 
-    # Check the updated DataFrames (optional, for checking)
+    # Check the updated DataFrames
     print(mass_train_data.head())
     print(mass_test_data.head())
 
@@ -122,7 +129,7 @@ def main():
     calc_train_data = fix_image_path_calc(calc_train_data, full_mammogram_dict, cropped_dict, roi_mask_dict)
     calc_test_data = fix_image_path_calc(calc_test_data, full_mammogram_dict, cropped_dict, roi_mask_dict)
 
-    # Check the updated DataFrames (optional, for checking)
+    # Check the updated DataFrames
     print(calc_train_data.head())
     print(calc_test_data.head())
 
@@ -132,7 +139,7 @@ def main():
     mass_train_data.info()
     calc_train_data.info()
 
-    # Rename columns for all dataframes
+    # Rename columns for consistency
     mass_train_data = rename_columns(mass_train_data)
     mass_test_data = rename_columns(mass_test_data)
     calc_train_data = rename_columns(calc_train_data)
@@ -155,11 +162,9 @@ def main():
     mam_train_data['pathology'] = mam_train_data['pathology'].map(label_mapping)
     mam_test_data['pathology'] = mam_test_data['pathology'].map(label_mapping)
 
-    # Drop rows with missing pathology
+    # Drop rows with missing pathology and convert to int
     mam_train_data = mam_train_data.dropna(subset=['pathology'])
     mam_test_data = mam_test_data.dropna(subset=['pathology'])
-
-    # Convert pathology to int
     mam_train_data['pathology'] = mam_train_data['pathology'].astype(int)
     mam_test_data['pathology'] = mam_test_data['pathology'].astype(int)
 
@@ -179,7 +184,7 @@ def main():
     # Print initial class distribution
     print("Initial class distribution:", Counter(y))
 
-    # Balance the imbalance of the classes in the dataset
+    # Balance the dataset
     X_resampled, y_resampled = balanced_sampling(X, y, target_ratio=1.2)
 
     # Create a new DataFrame with the resampled data
@@ -195,7 +200,7 @@ def main():
 
     print("Validation set class distribution:", Counter(mam_val_data['pathology']))
 
-    # Define transforms
+    # Define transforms for data augmentation
     train_transform = AlignedTransform(
         size=(224, 224),
         flip_prob=0.5,
@@ -211,11 +216,11 @@ def main():
     )
     val_test_transform = AlignedTransform(size=(224, 224), flip_prob=0, rotate_prob=0)
 
-    # Assuming you have three DataFrames: train_df, val_df, and test_df for your datasets
+    # Get feature dimensions
     num_numerical_features, num_categorical_features, categorical_feature_columns = BreastCancerDataset.get_feature_dimensions(
         mam_train_data, mam_val_data, mam_test_data)
 
-    # Assuming you have three DataFrames: train_df, val_df, and test_df for your datasets
+    # Get combined categorical columns
     categorical_columns = ['calc_type', 'calc_distribution', 'left_or_right_breast', 'abnormality_type', 'mass_shape',
                            'mass_margins']
     all_categorical_columns = get_combined_categorical_columns(mam_train_data, mam_val_data, mam_test_data,
@@ -223,12 +228,12 @@ def main():
 
     print(f"Number of categorical features: {len(all_categorical_columns)}")
 
-    # Now you can initialize your datasets
+    # Initialise datasets
     train_dataset = BreastCancerDataset(mam_train_data, transform=train_transform, categorical_columns=categorical_columns, all_categorical_columns=all_categorical_columns)
     val_dataset = BreastCancerDataset(mam_val_data, transform=val_test_transform, categorical_columns=categorical_columns, all_categorical_columns=all_categorical_columns)
     test_dataset = BreastCancerDataset(mam_test_data, transform=val_test_transform, categorical_columns=categorical_columns, all_categorical_columns=all_categorical_columns)
 
-    # Visualise Augs
+    # Visualise augmentations
     visualize_augmentations(train_dataset)
     verify_augmentations(train_dataset)
 
@@ -244,17 +249,25 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(device)
 
+    # Set device (GPU if available, else CPU)
     model = MultimodalModel(num_numerical_features, num_categorical_features, dropout_rate=0.6).to(device)
 
-    # Patience for early stopping to prevent overfitting - number means how many epochs to stop on no improvement
-    patience = 3 # 5
+    # Set up training parameters
+    patience = 3 # 5 # Patience for early stopping to prevent overfitting - number means how many epochs to stop on no improvement
     #criterion = nn.CrossEntropyLoss()
     #criterion = FocalLoss()
+
+    class_counts = Counter(y_resampled)
+    total_samples = sum(class_counts.values())
+    class_weights = {class_label: total_samples / count for class_label, count in class_counts.items()}
+
+    # Mapping to alpha values, ensuring the minority class gets higher weight
+    alpha = class_weights[0]  # The weight for the minority class
     """
     Alpha is the class weight parameter. It's used to address class imbalance by assigning different weights to different classes.
     Gamma is the focusing parameter. It determines the rate at which easy examples are down-weighted in the loss function.
     """
-    criterion = WeightedFocalLoss(alpha=6, gamma=2)
+    criterion = WeightedFocalLoss(alpha=alpha, gamma=2)
     #criterion = ImprovedWeightedFocalLoss(alpha=1, gamma=2)
     #optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
@@ -269,15 +282,11 @@ def main():
     #scheduler = OneCycleLR(optimizer, max_lr=0.01, epochs=num_epochs, steps_per_epoch=len(train_loader))
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
 
+    # Training loop
     best_val_loss = float('inf')
     no_improve = 0
+    train_losses, val_losses, train_accuracies, val_accuracies = [], [], [], []
 
-    train_losses = []
-    val_losses = []
-    train_accuracies = []
-    val_accuracies = []
-
-    # Training loop
     for epoch in range(num_epochs):
         train_loss, train_acc = train(model, train_loader, criterion, optimizer, device, epoch, num_epochs, scheduler)
         val_loss, val_acc = validate(model, val_loader, criterion, device, epoch, num_epochs)
@@ -304,7 +313,7 @@ def main():
             print("Early stopping!")
             break
 
-    # After training, plot the metrics
+    # Plot training metrics
     plt.figure(figsize=(12, 4))
     plt.subplot(1, 2, 1)
     plt.plot(train_losses, label='Train Loss')
@@ -324,7 +333,7 @@ def main():
     model.load_state_dict(torch.load('best_model.pth'))
     accuracy, precision, recall, f1, auc_roc, misclassified_samples, correctly_classified_samples = test_model(model, test_loader, criterion, device)
     # After training the model:
-    analyze_feature_importance(model)
+    #analyze_feature_importance(model)
 
 if __name__ == '__main__':
     main()

@@ -9,8 +9,19 @@ import torch.nn.functional as F
 from imblearn.under_sampling import RandomUnderSampler
 from imblearn.over_sampling import RandomOverSampler
 from collections import Counter
-# Focal Loss
+
 class FocalLoss(nn.Module):
+    """
+    Implements Focal Loss, a loss function that addresses class imbalance problems.
+
+    Focal Loss applies a modulating term to the cross entropy loss, in order to focus
+    on hard, misclassified examples.
+
+    Attributes:
+        alpha (float): Weighting factor in range (0,1) to balance positive vs negative examples.
+        gamma (float): Focusing parameter for modulating factor (1-p). Default: 2.
+        reduction (str): Specifies the reduction to apply to the output. Default: 'mean'.
+    """
     def __init__(self, alpha=1, gamma=2, reduction='mean'):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
@@ -18,6 +29,16 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, inputs, targets):
+        """
+        Compute the focal loss.
+
+        Args:
+            inputs (torch.Tensor): Predicted class scores, typically of shape (N, C) where N is the batch size and C is the number of classes.
+            targets (torch.Tensor): Ground truth class indices, typically of shape (N,) where N is the batch size.
+
+        Returns:
+            torch.Tensor: Computed focal loss.
+        """
         ce_loss = nn.functional.cross_entropy(inputs, targets, reduction='none')
         pt = torch.exp(-ce_loss)
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
@@ -29,8 +50,19 @@ class FocalLoss(nn.Module):
         else:
             return focal_loss
 
-
 class WeightedFocalLoss(nn.Module):
+    """
+    Implements Weighted Focal Loss, which combines class weighting with Focal Loss.
+
+    This loss function is particularly useful for highly imbalanced datasets, as it
+    considers both the class imbalance and the difficulty of classifying each sample.
+
+    Attributes:
+        alpha (float): Weighting factor in range (0,1) to balance positive vs negative examples.
+        gamma (float): Focusing parameter for modulating factor (1-p). Default: 2.
+        reduction (str): Specifies the reduction to apply to the output. Default: 'mean'.
+        class_weights (torch.Tensor): Computed weights for each class based on their frequency in the dataset.
+    """
     def __init__(self, alpha=1, gamma=2, reduction='mean'):
         super(WeightedFocalLoss, self).__init__()
         self.alpha = alpha
@@ -39,6 +71,12 @@ class WeightedFocalLoss(nn.Module):
         self.class_weights = None
 
     def update_class_weights(self, targets):
+        """
+        Compute and update class weights based on the frequency of each class in the targets.
+
+        Args:
+            targets (torch.Tensor): Ground truth class indices.
+        """
         if self.class_weights is None:
             class_counts = torch.bincount(targets)
             total_samples = class_counts.sum()
@@ -46,6 +84,16 @@ class WeightedFocalLoss(nn.Module):
             self.class_weights = class_weights.to(targets.device)
 
     def forward(self, inputs, targets):
+        """
+        Compute the weighted focal loss.
+
+        Args:
+            inputs (torch.Tensor): Predicted class scores, typically of shape (N, C) where N is the batch size and C is the number of classes.
+            targets (torch.Tensor): Ground truth class indices, typically of shape (N,) where N is the batch size.
+
+        Returns:
+            torch.Tensor: Computed weighted focal loss.
+        """
         self.update_class_weights(targets)
 
         ce_loss = F.cross_entropy(inputs, targets, weight=self.class_weights, reduction='none')
@@ -63,8 +111,24 @@ class WeightedFocalLoss(nn.Module):
 class AlignedTransform:
     """
     Perform safe augmentations for mammogram images and align mask and image transforms.
-    """
 
+    This class implements various image augmentation techniques that are suitable for
+    medical imaging, particularly mammograms. It ensures that the same transformations
+    are applied to both the image and its corresponding mask.
+
+    Attributes:
+        size (tuple): Target size for resizing. Default: (224, 224)
+        flip_prob (float): Probability of horizontal flip. Default: 0.5
+        rotate_prob (float): Probability of rotation. Default: 0.5
+        max_rotation (float): Maximum rotation angle in degrees. Default: 10
+        brightness_range (tuple): Range for random brightness adjustment. Default: (0.9, 1.1)
+        contrast_range (tuple): Range for random contrast adjustment. Default: (0.9, 1.1)
+        crop_prob (float): Probability of random crop. Default: 0.3
+        crop_scale (tuple): Range of size of the origin size cropped. Default: (0.8, 1.0)
+        crop_ratio (tuple): Range of aspect ratio of the origin aspect ratio cropped. Default: (0.9, 1.1)
+        noise_prob (float): Probability of adding random noise. Default: 0.3
+        noise_factor (float): Strength of the random noise. Default: 0.05
+    """
     def __init__(self, size=(224, 224), flip_prob=0.5, rotate_prob=0.5, max_rotation=10,
                  brightness_range=(0.9, 1.1), contrast_range=(0.9, 1.1),
                  crop_prob=0.3, crop_scale=(0.8, 1.0), crop_ratio=(0.9, 1.1),
@@ -84,6 +148,16 @@ class AlignedTransform:
         self.elastic_transform = transforms.ElasticTransform(alpha=50.0, sigma=5.0)
 
     def __call__(self, image, mask):
+        """
+        Apply the configured transformations to both the image and mask.
+
+        Args:
+            image (PIL.Image or torch.Tensor): Input image to be transformed.
+            mask (PIL.Image or torch.Tensor): Corresponding mask to be transformed.
+
+        Returns:
+            tuple: Transformed image and mask as torch.Tensor objects.
+        """
         # Convert to PIL Image if tensor
         if isinstance(image, torch.Tensor):
             image = TF.to_pil_image(image)
@@ -156,15 +230,19 @@ def balanced_sampling(X, y, target_ratio):
     Perform both oversampling of the minority class and undersampling of the majority class
     to balance the dataset.
 
-    Parameters:
-    X (array-like): Feature matrix
-    y (array-like): Target vector
-    target_ratio (float): Desired ratio of minority to majority class.
-                          Should be between 0.0 and 1.0.
+    This function aims to address class imbalance by adjusting the number of samples in each class.
+    It first oversamples the minority class and then undersamples the majority class to achieve
+    the desired ratio between classes.
+
+    Args:
+        X (array-like): Feature matrix
+        y (array-like): Target vector
+        target_ratio (float): Desired ratio of minority to majority class.
+                              Should be between 0.0 and 1.0.
 
     Returns:
-    X_resampled (array-like): The feature matrix after resampling
-    y_resampled (array-like): The target vector after resampling
+        tuple: X_resampled (array-like): The feature matrix after resampling
+               y_resampled (array-like): The target vector after resampling
     """
     # Count the occurrences of each class
     class_counts = Counter(y)

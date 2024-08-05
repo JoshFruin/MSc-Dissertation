@@ -6,6 +6,24 @@ import matplotlib.image as mpimg
 import torch
 
 def visualise_data(mass_train, calc_train):
+    """
+    Visualize various aspects of breast cancer data for mass and calcification datasets.
+
+    This function creates multiple visualizations to help understand the distribution
+    and characteristics of the breast cancer data.
+
+    Args:
+    mass_train (DataFrame): Dataset containing information about breast masses.
+    calc_train (DataFrame): Dataset containing information about breast calcifications.
+
+    The function generates the following plots:
+    1. Count plots for assessment and pathology in both datasets
+    2. Subtlety distribution for both datasets
+    3. Mass shape distribution by pathology
+    4. Calcification type distribution by pathology
+    5. Breast density distribution by pathology for both datasets
+    6. Sample images from both datasets (full mammograms, cropped mammograms, and ROI images)
+    """
     # Set the color palette for mass_train
     mass_palette = sns.color_palette("viridis", n_colors=len(mass_train['assessment'].unique()))
     sns.countplot(data=mass_train, y='assessment', hue='pathology', palette=mass_palette)
@@ -74,7 +92,16 @@ def visualise_data(mass_train, calc_train):
     plt.show()
 
     def display_images(column, number):
-        """Displays images in the dataset, handling missing files."""
+        """
+        Displays images from the dataset, handling missing files.
+
+        Args:
+        column (str): The column name in the DataFrame containing image file paths.
+        number (int): The number of images to display.
+
+        This function attempts to display the specified number of images from the dataset.
+        If an image file is missing, it logs the missing file path.
+        """
         number_to_visualize = number
 
         fig = plt.figure(figsize=(15, 5))
@@ -113,21 +140,40 @@ def visualise_data(mass_train, calc_train):
     display_images('ROI_mask_file_path', 5)
 
 def show_images(dataset, num_images=5):
-    def show_images(dataset, num_images=5):
-        fig, axes = plt.subplots(2, num_images, figsize=(15, 6))
-        for i in range(num_images):
-            image, mask, label = dataset[i]
-            # Display the first channel of the image (assuming it's RGB)
-            axes[0, i].imshow(image[0], cmap='gray')
-            axes[0, i].set_title(f"Label: {label}")
-            axes[0, i].axis('off')
+    """
+    Display a set of images and their corresponding masks from a dataset.
 
-            axes[1, i].imshow(mask.squeeze(), cmap='gray')
-            axes[1, i].set_title("Mask")
-            axes[1, i].axis('off')
-        plt.show()
+    Args:
+    dataset (torch.utils.data.Dataset): The dataset containing images and masks.
+    num_images (int): The number of images to display (default is 5).
+
+    This function creates a figure with two rows: the top row shows the images,
+    and the bottom row shows the corresponding masks.
+    """
+    fig, axes = plt.subplots(2, num_images, figsize=(15, 6))
+    for i in range(num_images):
+        image, mask, label = dataset[i]
+        # Display the first channel of the image (assuming it's RGB)
+        axes[0, i].imshow(image[0], cmap='gray')
+        axes[0, i].set_title(f"Label: {label}")
+        axes[0, i].axis('off')
+
+        axes[1, i].imshow(mask.squeeze(), cmap='gray')
+        axes[1, i].set_title("Mask")
+        axes[1, i].axis('off')
+    plt.show()
 
 def visualize_batch(dataloader, num_images=5):
+    """
+    Visualize a batch of images and masks from a dataloader.
+
+    Args:
+    dataloader (torch.utils.data.DataLoader): The dataloader to visualize.
+    num_images (int): The number of images to display from the batch (default is 5).
+
+    This function displays a batch of images and their corresponding masks (if available)
+    from the provided dataloader.
+    """
     dataiter = iter(dataloader)
     images, masks, labels = next(dataiter)
 
@@ -148,8 +194,19 @@ def visualize_batch(dataloader, num_images=5):
     plt.tight_layout()
     plt.show()
 
-
 def dataloader_visualisations(train_dataset, test_dataset, train_loader, test_loader):
+    """
+    Visualize data from datasets and dataloaders.
+
+    Args:
+    train_dataset (torch.utils.data.Dataset): The training dataset.
+    test_dataset (torch.utils.data.Dataset): The testing dataset.
+    train_loader (torch.utils.data.DataLoader): The training dataloader.
+    test_loader (torch.utils.data.DataLoader): The testing dataloader.
+
+    This function visualizes samples from both datasets and dataloaders,
+    and prints the shapes of the data batches from the dataloaders.
+    """
     print("Training Dataset:")
     show_images(train_dataset)
 
@@ -174,8 +231,17 @@ def dataloader_visualisations(train_dataset, test_dataset, train_loader, test_lo
     print(f"Masks Shape: {masks.shape}")
     print(f"Labels Shape: {labels.shape}")
 
-# Visualise Augmentations
 def visualize_augmentations(dataset, num_samples=5):
+    """
+    Visualize the effect of data augmentations on images and masks.
+
+    Args:
+    dataset (torch.utils.data.Dataset): The dataset with augmentation transforms.
+    num_samples (int): The number of samples to visualize (default is 5).
+
+    This function displays original and augmented versions of randomly selected
+    samples from the dataset, along with information about the applied transformations.
+    """
     fig, axes = plt.subplots(num_samples, 4, figsize=(20, 4 * num_samples))
 
     for i in range(num_samples):
@@ -228,6 +294,17 @@ def visualize_augmentations(dataset, num_samples=5):
     plt.show()
 
 def verify_augmentations(dataset, num_samples=10):
+    """
+    Verify the effectiveness of data augmentations by analyzing a set of samples.
+
+    Args:
+    dataset (torch.utils.data.Dataset): The dataset with augmentation transforms.
+    num_samples (int): The number of samples to analyze (default is 10).
+
+    This function applies augmentations to a set of samples and calculates statistics
+    on the frequency and magnitude of various transformations (flip, rotation, color jitter).
+    It then prints a summary of these statistics.
+    """
     flip_count = 0
     rotate_count = 0
     total_brightness_change = 0
