@@ -334,3 +334,4 @@ class BreastCancerDataset(Dataset):
         else:
             self.mass_margins = pd.DataFrame(np.zeros((len(self.data), 1)), index=self.data.index,
                                              columns=['margins_N/A'])
+

@@ -28,7 +28,7 @@ from data_verification import (verify_data_linkage, verify_dataset_integrity,
                                check_mask_values, check_data_consistency,
                                check_label_consistency, visualize_augmented_samples,
                                verify_data_loading, verify_label_distribution,
-                               verify_image_mask_correspondence, verify_batch, verify_labels) #check_data_range,
+                               verify_image_mask_correspondence, verify_batch, verify_labels, check_and_remove_data_leakage) #check_data_range,
 from models import SimpleCNN, TransferLearningModel, MultimodalModel
 import torchvision.models as models
 from collections import Counter
@@ -184,6 +184,11 @@ def main():
     # Print initial class distribution
     print("Initial class distribution:", Counter(y))
 
+    # Verify data linkage
+    print("Verifying data linkage...")
+    #verify_data_linkage(mass_train_path, mam_train_data, full_mammogram_dict, roi_mask_dict, num_samples=5)
+    #verify_data_linkage(calc_train_path, mam_train_data, full_mammogram_dict, roi_mask_dict, num_samples=5)
+
     # Balance the dataset
     X_resampled, y_resampled = balanced_sampling(X, y, target_ratio=1.2)
 
@@ -200,6 +205,9 @@ def main():
 
     print("Validation set class distribution:", Counter(mam_val_data['pathology']))
 
+    # Check and remove data leakage
+    mam_train_data, mam_val_data = check_and_remove_data_leakage(mam_train_data, mam_val_data)
+
     # Define transforms for data augmentation
     train_transform = AlignedTransform(
         size=(224, 224),
@@ -214,7 +222,33 @@ def main():
         noise_prob=0.2,
         noise_factor=0.02
     )
-    val_test_transform = AlignedTransform(size=(224, 224), flip_prob=0, rotate_prob=0)
+    aggressive_train_transform = AlignedTransform(
+        size=(224, 224),
+        flip_prob=0.5,
+        rotate_prob=0.7,  # Increased from 0.5
+        max_rotation=5,  # Increased from 3
+        brightness_range=(0.95, 1.05),  # Slightly wider range
+        contrast_range=(0.95, 1.05),  # Slightly wider range
+        crop_prob=0.3,  # Increased from 0.2
+        crop_scale=(0.9, 1.0),  # Wider range
+        crop_ratio=(0.9, 1.1),  # Wider range
+        noise_prob=0.3,  # Increased from 0.2
+        noise_factor=0.03  # Increased from 0.02
+    )
+    #val_test_transform = AlignedTransform(size=(224, 224), flip_prob=0, rotate_prob=0)
+    val_test_transform = AlignedTransform(
+        size=(224, 224),
+        flip_prob=0,
+        rotate_prob=0,
+        max_rotation=0,
+        brightness_range=(1.0, 1.0),
+        contrast_range=(1.0, 1.0),
+        crop_prob=0,
+        crop_scale=(1.0, 1.0),
+        crop_ratio=(1.0, 1.0),
+        noise_prob=0,
+        noise_factor=0
+    )
 
     # Get feature dimensions
     num_numerical_features, num_categorical_features, categorical_feature_columns = BreastCancerDataset.get_feature_dimensions(
@@ -233,6 +267,10 @@ def main():
     val_dataset = BreastCancerDataset(mam_val_data, transform=val_test_transform, categorical_columns=categorical_columns, all_categorical_columns=all_categorical_columns)
     test_dataset = BreastCancerDataset(mam_test_data, transform=val_test_transform, categorical_columns=categorical_columns, all_categorical_columns=all_categorical_columns)
 
+    # Check data consistency
+    print("Checking data consistency...")
+    check_data_consistency(train_dataset, val_dataset, test_dataset, image_path_column='image_file_path')
+
     # Visualise augmentations
     visualize_augmentations(train_dataset)
     verify_augmentations(train_dataset)
@@ -248,38 +286,26 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(device)
-
+    from models import B2MultimodalModel,ResMultimodalModel, Res50MultimodalModel
     # Set device (GPU if available, else CPU)
-    model = MultimodalModel(num_numerical_features, num_categorical_features, dropout_rate=0.6).to(device)
+    model = Res50MultimodalModel(num_numerical_features, num_categorical_features, dropout_rate=0.6).to(device)
 
     # Set up training parameters
     patience = 3 # 5 # Patience for early stopping to prevent overfitting - number means how many epochs to stop on no improvement
-    #criterion = nn.CrossEntropyLoss()
-    #criterion = FocalLoss()
 
     class_counts = Counter(y_resampled)
     total_samples = sum(class_counts.values())
     class_weights = {class_label: total_samples / count for class_label, count in class_counts.items()}
-
+    """Hyperparameters"""
     # Mapping to alpha values, ensuring the minority class gets higher weight
     alpha = class_weights[0]  # The weight for the minority class
-    """
-    Alpha is the class weight parameter. It's used to address class imbalance by assigning different weights to different classes.
-    Gamma is the focusing parameter. It determines the rate at which easy examples are down-weighted in the loss function.
-    """
+    # Balances the dataset
+    #criterion = nn.CrossEntropyLoss()
     criterion = WeightedFocalLoss(alpha=alpha, gamma=2)
-    #criterion = ImprovedWeightedFocalLoss(alpha=1, gamma=2)
-    #optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
-    #scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=patience, verbose=True)
-
     num_epochs = 30
     # Calculate the total number of training steps
     total_steps = len(train_loader) * num_epochs
-
-    # Create the OneCycleLR scheduler
-    #scheduler = OneCycleLR(optimizer, max_lr=0.005, total_steps=total_steps, pct_start=0.3)
-    #scheduler = OneCycleLR(optimizer, max_lr=0.01, epochs=num_epochs, steps_per_epoch=len(train_loader))
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
 
     # Training loop
@@ -332,8 +358,9 @@ def main():
     print("Loading best model and evaluating on test set...")
     model.load_state_dict(torch.load('best_model.pth'))
     accuracy, precision, recall, f1, auc_roc, misclassified_samples, correctly_classified_samples = test_model(model, test_loader, criterion, device)
-    # After training the model:
-    #analyze_feature_importance(model)
+
+    # Call the analyze_misclassifications function
+    analyze_misclassifications(misclassified_samples)
 
 if __name__ == '__main__':
     main()

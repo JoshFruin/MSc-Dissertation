@@ -7,30 +7,9 @@ import random
 import os
 import torchvision.transforms.functional as TF
 
+
 def verify_data_linkage(original_csv_path, processed_df, full_mammogram_dict, roi_mask_dict,
-                                      num_samples=5):
-    """
-    Verify that images, masks, and labels are correctly linked from original CSV through preprocessing.
-
-    This function performs the following steps:
-    1. Loads the original CSV file
-    2. Selects random samples from the processed dataframe
-    3. For each sample:
-       - Finds corresponding data in the original CSV
-       - Verifies file paths and existence
-       - Loads and displays the image, mask, and overlay
-       - Prints relevant information for manual verification
-
-    Args:
-    original_csv_path (str): Path to the original CSV file containing raw data.
-    processed_df (pd.DataFrame): The processed dataframe containing image paths and labels.
-    full_mammogram_dict (dict): Dictionary mapping keys to full mammogram image paths.
-    roi_mask_dict (dict): Dictionary mapping keys to ROI mask image paths.
-    num_samples (int): Number of random samples to verify. Default is 5.
-
-    Returns:
-    None. Prints verification results and displays images for visual inspection.
-    """
+                        num_samples=5):
     print(f"Verifying {num_samples} random samples...")
 
     # Load original CSV
@@ -51,7 +30,13 @@ def verify_data_linkage(original_csv_path, processed_df, full_mammogram_dict, ro
         processed_row = processed_df.iloc[idx]
 
         # Find the corresponding row in the original CSV
-        original_row = original_df[original_df['patient_id'] == processed_row['patient_id']].iloc[0]
+        matching_rows = original_df[original_df['patient_id'] == processed_row['patient_id']]
+
+        if matching_rows.empty:
+            print(f"Error: No matching patient_id found in original CSV for patient_id {processed_row['patient_id']}")
+            continue
+
+        original_row = matching_rows.iloc[0]
 
         # Extract relevant information
         original_img_path = original_row['image file path']
@@ -106,6 +91,7 @@ def verify_data_linkage(original_csv_path, processed_df, full_mammogram_dict, ro
         plt.show()
 
         print(f"Sample {i + 1}:")
+        print(f"  Patient ID: {processed_row['patient_id']}")
         print(f"  Original Image Path: {original_img_path}")
         print(f"  Processed Image Path: {processed_img_path}")
         print(f"  Original Mask Path: {original_mask_path}")
@@ -195,7 +181,7 @@ def check_mask_values(dataset, num_samples=10):
 
     print("Mask value check completed.")
 
-def check_data_consistency(train_dataset, val_dataset, test_dataset):
+def check_data_consistency(train_dataset, val_dataset, test_dataset, image_path_column='image_file_path'):
     """
     Check for data leakage between train, validation, and test sets.
 
@@ -206,37 +192,46 @@ def check_data_consistency(train_dataset, val_dataset, test_dataset):
     3. Prints sample overlapping image paths for further investigation
 
     Args:
-    train_dataset: The training dataset. Should have a 'data' attribute with 'image file path' column.
-    val_dataset: The validation dataset. Should have a 'data' attribute with 'image file path' column.
-    test_dataset: The test dataset. Should have a 'data' attribute with 'image file path' column.
+    train_dataset: The training dataset. Should have a 'data' attribute with image file path column.
+    val_dataset: The validation dataset. Should have a 'data' attribute with image file path column.
+    test_dataset: The test dataset. Should have a 'data' attribute with image file path column.
+    image_path_column: The name of the column containing image file paths. Default is 'image_file_path'.
 
     Returns:
     None. Prints the results of the consistency check.
     """
-    train_images = set(train_dataset.data['image file path'])
-    val_images = set(val_dataset.data['image file path'])
-    test_images = set(test_dataset.data['image file path'])
+    try:
+        train_images = set(train_dataset.data[image_path_column])
+        val_images = set(val_dataset.data[image_path_column])
+        test_images = set(test_dataset.data[image_path_column])
 
-    train_val_overlap = train_images.intersection(val_images)
-    train_test_overlap = train_images.intersection(test_images)
-    val_test_overlap = val_images.intersection(test_images)
+        train_val_overlap = train_images.intersection(val_images)
+        train_test_overlap = train_images.intersection(test_images)
+        val_test_overlap = val_images.intersection(test_images)
 
-    if len(train_val_overlap) > 0:
-        print(f"Data leakage between train and validation sets: {len(train_val_overlap)} images")
-        print("Sample overlapping images:")
-        for img in list(train_val_overlap)[:5]:
-            print(img)
+        if len(train_val_overlap) > 0:
+            print(f"Data leakage between train and validation sets: {len(train_val_overlap)} images")
+            print("Sample overlapping images:")
+            for img in list(train_val_overlap)[:5]:
+                print(img)
 
-    if len(train_test_overlap) > 0:
-        print(f"Data leakage between train and test sets: {len(train_test_overlap)} images")
+        if len(train_test_overlap) > 0:
+            print(f"Data leakage between train and test sets: {len(train_test_overlap)} images")
 
-    if len(val_test_overlap) > 0:
-        print(f"Data leakage between validation and test sets: {len(val_test_overlap)} images")
+        if len(val_test_overlap) > 0:
+            print(f"Data leakage between validation and test sets: {len(val_test_overlap)} images")
 
-    if len(train_val_overlap) == 0 and len(train_test_overlap) == 0 and len(val_test_overlap) == 0:
-        print("No data leakage detected between datasets.")
-    else:
-        print("Data leakage detected. Please fix the dataset split.")
+        if len(train_val_overlap) == 0 and len(train_test_overlap) == 0 and len(val_test_overlap) == 0:
+            print("No data leakage detected between datasets.")
+        else:
+            print("Data leakage detected. Please fix the dataset split.")
+
+    except AttributeError:
+        print("Error: Dataset objects do not have a 'data' attribute. Please check your dataset implementation.")
+    except KeyError:
+        print(f"Error: '{image_path_column}' column not found in the dataset. Please check the column name.")
+    except Exception as e:
+        print(f"An unexpected error occurred during data consistency check: {str(e)}")
 
 def check_label_consistency(dataset):
     """
@@ -424,4 +419,50 @@ def verify_labels(dataset, num_samples=10):
         _, _, label = dataset[idx]
         print(f"Sample {i+1}: Label = {label}")
 
+def check_and_remove_data_leakage(train_df, val_df, image_path_column='image_file_path'):
+    """
+    Check for data leakage between train and validation sets and reassign overlapping images alternatively.
 
+    Args:
+    train_df (pd.DataFrame): The training DataFrame.
+    val_df (pd.DataFrame): The validation DataFrame.
+    image_path_column (str): The name of the column containing image file paths. Default is 'image_file_path'.
+
+    Returns:
+    pd.DataFrame, pd.DataFrame: Updated DataFrames with reassigned overlapping images.
+    """
+    try:
+        train_images = set(train_df[image_path_column])
+        val_images = set(val_df[image_path_column])
+
+        train_val_overlap = train_images.intersection(val_images)
+
+        if len(train_val_overlap) > 0:
+            print(f"Data leakage between train and validation sets: {len(train_val_overlap)} images")
+            print("Reassigning overlapping images...")
+
+            overlap_list = list(train_val_overlap)
+            for i, img in enumerate(overlap_list):
+                if i % 2 == 0:
+                    # Remove from train and add to val
+                    train_df = train_df[train_df[image_path_column] != img]
+                    val_df = pd.concat([val_df, train_df[train_df[image_path_column] == img]])
+                else:
+                    # Remove from val and add to train
+                    val_df = val_df[val_df[image_path_column] != img]
+                    train_df = pd.concat([train_df, val_df[val_df[image_path_column] == img]])
+
+            # Reset indexes
+            train_df = train_df.reset_index(drop=True)
+            val_df = val_df.reset_index(drop=True)
+        else:
+            print("No data leakage detected between train and validation sets.")
+
+        return train_df, val_df
+
+    except KeyError:
+        print(f"Error: '{image_path_column}' column not found in the dataset. Please check the column name.")
+        return train_df, val_df
+    except Exception as e:
+        print(f"An unexpected error occurred during data consistency check: {str(e)}")
+        return train_df, val_df

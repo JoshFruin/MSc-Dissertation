@@ -107,7 +107,6 @@ class WeightedFocalLoss(nn.Module):
         else:
             return focal_loss
 
-
 class AlignedTransform:
     """
     Perform safe augmentations for mammogram images and align mask and image transforms.
@@ -153,7 +152,8 @@ class AlignedTransform:
 
         Args:
             image (PIL.Image or torch.Tensor): Input image to be transformed.
-            mask (PIL.Image or torch.Tensor): Corresponding mask to be transformed.
+            mask (PIL.Image or torch.Tensor): Corresponding mask to be tr
+            ansformed.
 
         Returns:
             tuple: Transformed image and mask as torch.Tensor objects.

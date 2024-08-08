@@ -197,6 +197,269 @@ class MultimodalModel(nn.Module):
 
         return x
 
+class B2MultimodalModel(nn.Module):
+    """
+    A multimodal neural network model that combines image, mask, numerical, and categorical data.
+    This version uses EfficientNet-B2 for image feature extraction.
+    """
+    def __init__(self, num_numerical_features, num_categorical_features, dropout_rate=0.5, num_heads=4):
+        super(B2MultimodalModel, self).__init__()
+
+        # Image feature extractor (EfficientNet-B2)
+        self.efficientnet = models.efficientnet_b2(pretrained=True)
+        self.unfreeze_last_n_layers(self.efficientnet, 20)  # Unfreeze last 20 layers
+        num_ftrs = self.efficientnet.classifier[1].in_features
+        self.efficientnet.classifier = nn.Identity()
+
+        # Mask feature extractor
+        self.mask_conv = nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1, bias=False)
+        self.mask_bn = nn.BatchNorm2d(32)
+        self.mask_layers = nn.Sequential(
+            self.mask_conv, self.mask_bn, nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1))
+        )
+
+        # Numerical and categorical feature processors
+        self.num_dense = nn.Sequential(
+            nn.Linear(num_numerical_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.Dropout(dropout_rate)
+        )
+        self.cat_dense = nn.Sequential(
+            nn.Linear(num_categorical_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.Dropout(dropout_rate)
+        )
+
+        # Multi-head attention mechanism
+        self.attention = MultiHeadAttentionBlock(num_ftrs + 32 + 64 + 64, num_heads)
+
+        # Fully connected layers
+        self.fc1 = nn.Linear(num_ftrs + 32 + 64 + 64, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, 2)
+
+        self.dropout = nn.Dropout(dropout_rate)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.bn2 = nn.BatchNorm1d(256)
+
+    def unfreeze_last_n_layers(self, model, n):
+        """
+        Unfreeze the last n layers of a model for fine-tuning.
+        """
+        params = list(model.parameters())
+        for param in params[:-n]:
+            param.requires_grad = False
+        for param in params[-n:]:
+            param.requires_grad = True
+
+    def forward(self, image, mask, numerical, categorical):
+        """
+        Forward pass of the multimodal model.
+        """
+        # Process image features
+        x_img = self.efficientnet(image)
+
+        # Process mask features
+        x_mask = self.mask_layers(mask[:, 0:1, :, :])
+        x_mask = x_mask.view(mask.size(0), -1)
+
+        # Process numerical and categorical feature
+        x_num = self.num_dense(numerical)
+        x_cat = self.cat_dense(categorical)
+
+        # Combine all features
+        combined = torch.cat((x_img, x_mask, x_num, x_cat), dim=1)
+
+        # Apply multi-head attention
+        combined = self.attention(combined)
+
+        # Final fully connected layers
+        x = F.relu(self.bn1(self.fc1(combined)))
+        x = self.dropout(x)
+        x = F.relu(self.bn2(self.fc2(x)))
+        x = self.dropout(x)
+        x = self.fc3(x)
+
+        return x
+class ResMultimodalModel(nn.Module):
+    """
+    A multimodal neural network model that combines image, mask, numerical, and categorical data.
+    This version uses ResNet-18 for image feature extraction.
+    """
+    def __init__(self, num_numerical_features, num_categorical_features, dropout_rate=0.5, num_heads=4):
+        super(ResMultimodalModel, self).__init__()
+
+        # Image feature extractor (ResNet-18)
+        self.resnet = models.resnet18(pretrained=True)
+        self.unfreeze_last_n_layers(self.resnet, 5)  # Unfreeze last 5 layers
+        num_ftrs = self.resnet.fc.in_features
+        self.resnet.fc = nn.Identity()
+
+        # Mask feature extractor
+        self.mask_conv = nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1, bias=False)
+        self.mask_bn = nn.BatchNorm2d(32)
+        self.mask_layers = nn.Sequential(
+            self.mask_conv, self.mask_bn, nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1))
+        )
+
+        # Numerical and categorical feature processors
+        self.num_dense = nn.Sequential(
+            nn.Linear(num_numerical_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.Dropout(dropout_rate)
+        )
+        self.cat_dense = nn.Sequential(
+            nn.Linear(num_categorical_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.Dropout(dropout_rate)
+        )
+
+        # Multi-head attention mechanism
+        self.attention = MultiHeadAttentionBlock(num_ftrs + 32 + 64 + 64, num_heads)
+
+        # Fully connected layers
+        self.fc1 = nn.Linear(num_ftrs + 32 + 64 + 64, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, 2)
+
+        self.dropout = nn.Dropout(dropout_rate)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.bn2 = nn.BatchNorm1d(256)
+
+    def unfreeze_last_n_layers(self, model, n):
+        """
+        Unfreeze the last n layers of a model for fine-tuning.
+        """
+        params = list(model.parameters())
+        for param in params[:-n]:
+            param.requires_grad = False
+        for param in params[-n:]:
+            param.requires_grad = True
+
+    def forward(self, image, mask, numerical, categorical):
+        """
+        Forward pass of the multimodal model.
+        """
+        # Process image features
+        x_img = self.resnet(image)
+
+        # Process mask features
+        x_mask = self.mask_layers(mask[:, 0:1, :, :])
+        x_mask = x_mask.view(mask.size(0), -1)
+
+        # Process numerical and categorical feature
+        x_num = self.num_dense(numerical)
+        x_cat = self.cat_dense(categorical)
+
+        # Combine all features
+        combined = torch.cat((x_img, x_mask, x_num, x_cat), dim=1)
+
+        # Apply multi-head attention
+        combined = self.attention(combined)
+
+        # Final fully connected layers
+        x = nn.ReLU()(self.bn1(self.fc1(combined)))
+        x = self.dropout(x)
+        x = nn.ReLU()(self.bn2(self.fc2(x)))
+        x = self.dropout(x)
+        x = self.fc3(x)
+
+        return x
+
+class Res50MultimodalModel(nn.Module):
+    """
+    A multimodal neural network model that combines image, mask, numerical, and categorical data.
+    This version uses ResNet-18 for image feature extraction.
+    """
+    def __init__(self, num_numerical_features, num_categorical_features, dropout_rate=0.5, num_heads=4):
+        super(Res50MultimodalModel, self).__init__()
+
+        # Image feature extractor (ResNet-50)
+        self.resnet = models.resnet50(pretrained=True)
+        self.unfreeze_last_n_layers(self.resnet, 5)  # Unfreeze last 5 layers
+        num_ftrs = self.resnet.fc.in_features
+        self.resnet.fc = nn.Identity()
+
+        # Mask feature extractor
+        self.mask_conv = nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1, bias=False)
+        self.mask_bn = nn.BatchNorm2d(32)
+        self.mask_layers = nn.Sequential(
+            self.mask_conv, self.mask_bn, nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1))
+        )
+
+        # Numerical and categorical feature processors
+        self.num_dense = nn.Sequential(
+            nn.Linear(num_numerical_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.Dropout(dropout_rate)
+        )
+        self.cat_dense = nn.Sequential(
+            nn.Linear(num_categorical_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.Dropout(dropout_rate)
+        )
+
+        # Multi-head attention mechanism
+        self.attention = MultiHeadAttentionBlock(num_ftrs + 32 + 64 + 64, num_heads)
+
+        # Fully connected layers
+        self.fc1 = nn.Linear(num_ftrs + 32 + 64 + 64, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, 2)
+
+        self.dropout = nn.Dropout(dropout_rate)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.bn2 = nn.BatchNorm1d(256)
+
+    def unfreeze_last_n_layers(self, model, n):
+        """
+        Unfreeze the last n layers of a model for fine-tuning.
+        """
+        params = list(model.parameters())
+        for param in params[:-n]:
+            param.requires_grad = False
+        for param in params[-n:]:
+            param.requires_grad = True
+
+    def forward(self, image, mask, numerical, categorical):
+        """
+        Forward pass of the multimodal model.
+        """
+        # Process image features
+        x_img = self.resnet(image)
+
+        # Process mask features
+        x_mask = self.mask_layers(mask[:, 0:1, :, :])
+        x_mask = x_mask.view(mask.size(0), -1)
+
+        # Process numerical and categorical feature
+        x_num = self.num_dense(numerical)
+        x_cat = self.cat_dense(categorical)
+
+        # Combine all features
+        combined = torch.cat((x_img, x_mask, x_num, x_cat), dim=1)
+
+        # Apply multi-head attention
+        combined = self.attention(combined)
+
+        # Final fully connected layers
+        x = nn.ReLU()(self.bn1(self.fc1(combined)))
+        x = self.dropout(x)
+        x = nn.ReLU()(self.bn2(self.fc2(x)))
+        x = self.dropout(x)
+        x = self.fc3(x)
+
+        return x
+
 class TransferLearningModel(nn.Module):
     def __init__(self, num_classes=2):
         super(TransferLearningModel, self).__init__()
