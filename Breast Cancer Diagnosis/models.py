@@ -460,6 +460,103 @@ class Res50MultimodalModel(nn.Module):
 
         return x
 
+class InceptionMultimodalModel(nn.Module):
+    """
+    A multimodal neural network model that combines image, mask, numerical, and categorical data.
+    This version uses InceptionV3 for image feature extraction.
+    """
+
+    def __init__(self, num_numerical_features, num_categorical_features, dropout_rate=0.5, num_heads=4):
+        super(InceptionMultimodalModel, self).__init__()
+
+        # Image feature extractor (InceptionV3)
+        self.inception = models.inception_v3(pretrained=True)
+        self.unfreeze_last_n_layers(self.inception, 5)  # Unfreeze last 5 layers
+        num_ftrs = self.inception.fc.in_features
+        self.inception.fc = nn.Identity()
+
+        # Mask feature extractor
+        self.mask_conv = nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1, bias=False)
+        self.mask_bn = nn.BatchNorm2d(32)
+        self.mask_layers = nn.Sequential(
+            self.mask_conv, self.mask_bn, nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1))
+        )
+
+        # Numerical and categorical feature processors
+        self.num_dense = nn.Sequential(
+            nn.Linear(num_numerical_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.Dropout(dropout_rate)
+        )
+        self.cat_dense = nn.Sequential(
+            nn.Linear(num_categorical_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.Dropout(dropout_rate)
+        )
+
+        # Multi-head attention mechanism
+        self.attention = MultiHeadAttentionBlock(num_ftrs + 32 + 64 + 64, num_heads)
+
+        # Fully connected layers
+        self.fc1 = nn.Linear(num_ftrs + 32 + 64 + 64, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, 2)
+
+        self.dropout = nn.Dropout(dropout_rate)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.bn2 = nn.BatchNorm1d(256)
+
+    def unfreeze_last_n_layers(self, model, n):
+        """
+        Unfreeze the last n layers of a model for fine-tuning.
+        """
+        params = list(model.parameters())
+        for param in params[:-n]:
+            param.requires_grad = False
+        for param in params[-n:]:
+            param.requires_grad = True
+
+    def forward(self, image, mask, numerical, categorical):
+        """
+        Forward pass of the multimodal model.
+        """
+        # Process image features
+        # InceptionV3 expects input size of 299x299
+        if image.size(2) != 299 or image.size(3) != 299:
+            image = F.interpolate(image, size=(299, 299), mode='bilinear', align_corners=False)
+
+        x_img = self.inception(image)
+
+        # If in training mode, InceptionV3 returns both output and aux_output
+        if self.training and isinstance(x_img, tuple):
+            x_img = x_img[0]  # Use only the main output, discard aux_output
+
+        # Process mask features
+        x_mask = self.mask_layers(mask[:, 0:1, :, :])
+        x_mask = x_mask.view(mask.size(0), -1)
+
+        # Process numerical and categorical feature
+        x_num = self.num_dense(numerical)
+        x_cat = self.cat_dense(categorical)
+
+        # Combine all features
+        combined = torch.cat((x_img, x_mask, x_num, x_cat), dim=1)
+
+        # Apply multi-head attention
+        combined = self.attention(combined)
+
+        # Final fully connected layers
+        x = F.relu(self.bn1(self.fc1(combined)))
+        x = self.dropout(x)
+        x = F.relu(self.bn2(self.fc2(x)))
+        x = self.dropout(x)
+        x = self.fc3(x)
+
+        return x
+
 class TransferLearningModel(nn.Module):
     def __init__(self, num_classes=2):
         super(TransferLearningModel, self).__init__()

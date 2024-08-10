@@ -29,7 +29,7 @@ from data_verification import (verify_data_linkage, verify_dataset_integrity,
                                check_label_consistency, visualize_augmented_samples,
                                verify_data_loading, verify_label_distribution,
                                verify_image_mask_correspondence, verify_batch, verify_labels, check_and_remove_data_leakage) #check_data_range,
-from models import SimpleCNN, TransferLearningModel, MultimodalModel
+from models import SimpleCNN, TransferLearningModel, MultimodalModel, B2MultimodalModel,ResMultimodalModel, Res50MultimodalModel, InceptionMultimodalModel
 import torchvision.models as models
 from collections import Counter
 import multiprocessing
@@ -286,9 +286,9 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(device)
-    from models import B2MultimodalModel,ResMultimodalModel, Res50MultimodalModel
+
     # Set device (GPU if available, else CPU)
-    model = Res50MultimodalModel(num_numerical_features, num_categorical_features, dropout_rate=0.6).to(device)
+    model = MultimodalModel(num_numerical_features, num_categorical_features, dropout_rate=0.6).to(device)
 
     # Set up training parameters
     patience = 3 # 5 # Patience for early stopping to prevent overfitting - number means how many epochs to stop on no improvement
