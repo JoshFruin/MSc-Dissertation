@@ -235,7 +235,7 @@ def main():
         noise_prob=0.3,  # Increased from 0.2
         noise_factor=0.03  # Increased from 0.02
     )
-    #val_test_transform = AlignedTransform(size=(224, 224), flip_prob=0, rotate_prob=0)
+
     val_test_transform = AlignedTransform(
         size=(224, 224),
         flip_prob=0,
